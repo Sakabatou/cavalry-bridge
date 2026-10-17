@@ -1,0 +1,8 @@
+STRINGTABLE Ocavalryspline
+{
+	Ocavalryspline "Cavalry Spline";
+
+	CAVALRYSPLINE_FOLLOW "Follow Latest Send";
+	CAVALRYSPLINE_LAYERS "Cavalry Layers";
+	CAVALRYSPLINE_SCALE "Scale";
+}

@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cavalry Bridge</title>
+<meta name="description" content="A live link between Cavalry and Cinema 4D: send Cavalry shapes and their animation to Cinema 4D as real splines, and stream Cinema 4D splines into Cavalry.">
+<link rel="icon" type="image/png" href="img/logo.png">
+<style>
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --text: #16181d;
+  --muted: #5b6270;
+  --border: #dde1e8;
+  --accent: #1f8fe0;        /* curve blue */
+  --accent-2: #f07a2c;      /* handle orange */
+  --accent-soft: #e3f1fc;
+  --on-accent: #ffffff;
+  --code-bg: #f0f2f6;
+  --warn-bg: #fff6e8;
+  --warn-text: #7a4a00;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 16px rgba(16, 24, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111318;
+    --surface: #181b22;
+    --surface-2: #20242d;
+    --text: #e8eaef;
+    --muted: #9aa2b1;
+    --border: #2b303b;
+    --accent: #6cc0ff;
+    --accent-2: #ff9a55;
+    --accent-soft: #15283a;
+    --on-accent: #08131d;
+    --code-bg: #1d2129;
+    --warn-bg: #2b2213;
+    --warn-text: #f3c98a;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111318; --surface: #181b22; --surface-2: #20242d; --text: #e8eaef; --muted: #9aa2b1;
+  --border: #2b303b; --accent: #6cc0ff; --accent-2: #ff9a55; --accent-soft: #15283a; --on-accent: #08131d;
+  --code-bg: #1d2129; --warn-bg: #2b2213; --warn-text: #f3c98a; --shadow: none;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.65 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; display: block; }
+code, pre, kbd { font-family: "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace; font-size: .88em; }
+code { background: var(--code-bg); padding: .1em .35em; border-radius: 5px; }
+pre { background: var(--code-bg); padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 .4em; background: var(--surface); }
+
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 16px; }
+
+/* nav */
+nav.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--border); }
+nav.top .wrap { display: flex; align-items: center; gap: 20px; height: 56px; }
+nav.top .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); white-space: nowrap; }
+nav.top .brand img { width: 26px; height: 26px; }
+nav.top .links { display: flex; gap: 18px; margin-left: auto; font-size: .93rem; }
+nav.top .links a { color: var(--muted); }
+nav.top .links a:hover { color: var(--text); text-decoration: none; }
+@media (max-width: 760px) { nav.top .links a.opt { display: none; } }
+@media (max-width: 440px) { nav.top .wrap { gap: 12px; } nav.top .links { gap: 12px; } nav.top .links a.opt2 { display: none; } }
+
+/* hero */
+.hero { padding: 64px 0 40px; }
+.hero .wrap { display: grid; grid-template-columns: 1.1fr .9fr; gap: 40px; align-items: center; }
+.hero h1 { font-size: clamp(2.2rem, 5vw, 3.3rem); line-height: 1.1; margin: 0 0 14px; letter-spacing: -.02em; }
+.hero h1 .accent { color: var(--accent); }
+.hero p.lead { font-size: 1.15rem; color: var(--muted); margin: 0 0 26px; max-width: 34em; }
+.buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; font-weight: 600; border: 1px solid var(--border); background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.btn:hover { text-decoration: none; border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn small { font-weight: 400; opacity: .8; }
+.hero .meta { margin-top: 14px; color: var(--muted); font-size: .88rem; }
+.hero-art { position: relative; }
+.hero-art .shot { position: relative; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); box-shadow: var(--shadow); background: #000; }
+.hero-art .shot + .shot { width: 62%; position: absolute; right: -14px; bottom: -34px; }
+.hero-art .label { position: absolute; left: 10px; top: 8px; font-size: .75rem; font-weight: 600; color: #fff; background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 6px; }
+@media (max-width: 860px) {
+  .hero .wrap { grid-template-columns: 1fr; }
+  .hero-art .shot + .shot { position: relative; right: auto; bottom: auto; width: 100%; margin-top: 12px; }
+}
+
+/* sections */
+section { padding: 56px 0; }
+section.alt { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.9rem; margin: 0 0 8px; letter-spacing: -.01em; }
+h2 + .sub { color: var(--muted); margin: 0 0 30px; max-width: 46em; }
+h3 { font-size: 1.15rem; margin: 0 0 6px; }
+
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; }
+@media (max-width: 860px) { .grid3, .grid2 { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; box-shadow: var(--shadow); }
+section.alt .card { background: var(--bg); }
+.card .tag { display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.card p { margin: 0; color: var(--muted); }
+.card ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pair figure, figure.single { margin: 0; }
+.pair img, figure.single img { border-radius: 10px; border: 1px solid var(--border); width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #000; }
+figcaption { font-size: .85rem; color: var(--muted); margin-top: 6px; }
+.showcase { display: grid; gap: 34px; }
+.showcase .item h3 { margin-bottom: 4px; }
+.showcase .item p { margin: 0 0 12px; color: var(--muted); }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
+
+/* steps */
+ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+ol.steps > li { counter-increment: s; position: relative; padding: 2px 0 2px 46px; }
+ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 30px; height: 30px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; display: grid; place-items: center; font-size: .9rem; }
+ol.steps > li strong { display: block; }
+ol.steps > li span { color: var(--muted); }
+
+.note { background: var(--warn-bg); color: var(--warn-text); border-radius: 10px; padding: 12px 16px; font-size: .93rem; margin-top: 18px; }
+
+table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+section.alt .table-wrap { background: var(--bg); }
+
+/* diagram */
+.diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 26px; }
+section.alt .diagram { background: var(--bg); }
+.diagram svg { width: 100%; height: auto; display: block; }
+.diagram .box { fill: var(--surface-2); stroke: var(--border); }
+.diagram .boxtitle { fill: var(--text); font-weight: 700; font-size: 15px; }
+.diagram .boxtext { fill: var(--muted); font-size: 12.5px; }
+.diagram .wire { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+.diagram .wire2 { stroke: var(--accent-2); stroke-width: 2.2; fill: none; }
+.diagram .wtext { fill: var(--text); font-size: 12.5px; font-weight: 600; }
+.diagram .wsub { fill: var(--muted); font-size: 11.5px; }
+.diagram .pill { fill: var(--accent-soft); stroke: var(--accent); }
+.diagram .pilltext { fill: var(--accent); font-size: 12px; font-weight: 700; }
+
+/* timeline */
+.timeline { position: relative; margin: 0; padding: 0; list-style: none; }
+.timeline::before { content: ""; position: absolute; left: 13px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+.timeline li { position: relative; padding: 0 0 26px 46px; }
+.timeline li::before { content: ""; position: absolute; left: 6px; top: 7px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); }
+.timeline li.problem::before { border-color: var(--accent-2); }
+.timeline h3 { margin-bottom: 2px; }
+.timeline p { margin: 4px 0 0; color: var(--muted); }
+.timeline .lesson { display: block; margin-top: 6px; font-size: .9rem; color: var(--text); }
+.timeline .lesson b { color: var(--accent-2); }
+
+details { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 0 16px; margin-bottom: 10px; }
+section.alt details { background: var(--bg); }
+details summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+details p, details ul { color: var(--muted); margin-top: 0; }
+
+footer { padding: 34px 0 48px; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--border); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: space-between; }
+
+.theme-toggle { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 4px 9px; cursor: pointer; font: inherit; font-size: .85rem; }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="img/logo.png" alt="">Cavalry Bridge</a>
+    <div class="links">
+      <a href="#features" class="opt2">Features</a>
+      <a href="#install">Install</a>
+      <a href="#use" class="opt">Use</a>
+      <a href="#how" class="opt">How it works</a>
+      <a href="#story" class="opt">How it was built</a>
+      <a data-repo href="">GitHub</a>
+    </div>
+    <button class="theme-toggle" id="theme" title="Switch light / dark">◐</button>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <h1>Move shapes between <span class="accent">Cavalry</span> and <span class="accent">Cinema&nbsp;4D</span>.</h1>
+      <p class="lead">Cavalry Bridge is a live link between the two apps. Send Cavalry graphics, with their animation, to Cinema&nbsp;4D as real spline objects, and stream Cinema&nbsp;4D splines back into Cavalry as you edit them.</p>
+      <div class="buttons">
+        <a class="btn primary" data-repo="/releases/latest" href="">Download for Windows <small>CavalryBridgeSetup.exe</small></a>
+        <a class="btn" data-repo href="">View on GitHub</a>
+      </div>
+      <div class="meta">Free · Windows · Cinema&nbsp;4D R23+ (tested on 2026) · Cavalry&nbsp;2.x</div>
+    </div>
+    <div class="hero-art">
+      <div class="shot"><span class="label">Cinema 4D</span><img src="img/cav2c4d-extrude.png" alt="Cavalry text, star and ellipse extruded in Cinema 4D"></div>
+      <div class="shot"><span class="label">Cavalry</span><img src="img/cav2c4d-cavalry.png" alt="The same shapes in Cavalry" style="aspect-ratio:16/9;object-fit:cover"></div>
+    </div>
+  </div>
+</header>
+
+<section id="features" class="alt">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="sub">Three things, in both directions. Everything runs on your own computer: the two apps talk over a local connection and nothing goes online.</p>
+    <div class="grid3">
+      <div class="card">
+        <span class="tag">Cavalry → Cinema 4D</span>
+        <h3>Shapes become real splines</h3>
+        <p>Select layers in Cavalry and click <b>Send Selected to C4D</b>. Each send arrives as a new <b>Cavalry Spline</b>, a genuine spline object like Circle or Text.</p>
+        <ul>
+          <li>Works directly in Extrude, Sweep, Loft and Lathe</li>
+          <li>Holes in letters stay holes</li>
+          <li>Plane, Reverse and Intermediate Points settings</li>
+          <li>Saved with your scene</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">Cavalry → Cinema 4D</span>
+        <h3>…with their animation</h3>
+        <p>Tick <b>Animation (PSR)</b> and every layer arrives as its own Cavalry Spline, carrying its position, rotation and scale keyframes.</p>
+        <ul>
+          <li>Eases are rebuilt as curve handles on the original keys</li>
+          <li>Bounce, Spring and other complex eases get one key per frame</li>
+          <li>Timing is kept in seconds across frame rates</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">Cinema 4D → Cavalry</span>
+        <h3>Live splines in Cavalry</h3>
+        <p>Link splines to the bridge in Cinema&nbsp;4D and they appear in Cavalry as editable shapes that follow every change you make.</p>
+        <ul>
+          <li>Seen through the C4D camera, or flat world XY</li>
+          <li>Text, Circle, Star or any other spline</li>
+          <li>Other objects drive a layer's position, rotation and scale</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="gallery">
+  <div class="wrap">
+    <h2>See it in action</h2>
+    <p class="sub">Screenshots from the tests used to build and check the bridge. Left and right show the same moment in each app.</p>
+    <div class="showcase">
+      <div class="item">
+        <h3>Cavalry to Cinema 4D</h3>
+        <p>Text, a star and an ellipse sent from Cavalry. The shapes, positions, rotations and Bézier curves all match. The ellipse was checked against the true curve to within 0.01 units.</p>
+        <div class="pair">
+          <figure><img src="img/cav2c4d-cavalry.png" alt="Shapes in Cavalry" style="object-fit:contain"><figcaption>Cavalry</figcaption></figure>
+          <figure><img src="img/cav2c4d-c4d.png" alt="The same shapes as splines in Cinema 4D"><figcaption>Cinema 4D: arrived as splines</figcaption></figure>
+        </div>
+      </div>
+      <div class="item">
+        <h3>Cinema 4D to Cavalry, live</h3>
+        <p>Text, Circle and Star splines streamed from Cinema&nbsp;4D. When the text was changed and the star rotated in C4D, Cavalry updated the same layers within moments.</p>
+        <div class="pair">
+          <figure><img src="img/c4d2cav-c4d.png" alt="Splines in Cinema 4D"><figcaption>Cinema 4D, through the camera</figcaption></figure>
+          <figure><img src="img/c4d2cav-cavalry.png" alt="The same splines as shapes in Cavalry"><figcaption>Cavalry: editable shapes</figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="alt">
+  <div class="wrap">
+    <div class="grid2">
+      <div>
+        <h2>Install</h2>
+        <p class="sub" style="margin-bottom:22px">One setup program puts everything where each app expects it. No admin rights are needed.</p>
+        <ol class="steps">
+          <li><strong>Download <code>CavalryBridgeSetup.exe</code></strong><span>From the <a data-repo="/releases/latest" href="">latest release</a>.</span></li>
+          <li><strong>Run it</strong><span>It lists every Cinema&nbsp;4D version it found and Cavalry. Tick the ones you want and click <b>Install</b>.</span></li>
+          <li><strong>Restart Cinema 4D</strong><span>Cinema&nbsp;4D only loads plugins when it starts.</span></li>
+          <li><strong>In Cavalry, open Window › Scripts › C4D Bridge</strong><span>The first time, Cavalry asks whether to trust the script, because it makes network calls on your computer. Choose to trust it, or it can't connect.</span></li>
+        </ol>
+        <div class="note"><b>"Windows protected your PC"?</b> The setup isn't code-signed yet. Click <b>More info</b>, then <b>Run anyway</b>.</div>
+      </div>
+      <div>
+        <figure class="single"><img src="img/setup-window.png" alt="The Cavalry Bridge setup window" style="aspect-ratio:auto"><figcaption>The setup lists what it found, and why it skipped anything.</figcaption></figure>
+        <div class="table-wrap" style="margin-top:18px">
+          <table>
+            <tr><th>App</th><th>Installed into</th></tr>
+            <tr><td>Cinema 4D</td><td><code>%APPDATA%\Maxon\&lt;version&gt;\plugins\cavalry_bridge</code><br><code>…\library\scripts\Cavalry Bridge Setup.py</code></td></tr>
+            <tr><td>Cavalry</td><td><code>%APPDATA%\Cavalry\Scripts\C4D Bridge.js</code></td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="use">
+  <div class="wrap">
+    <h2>Use</h2>
+    <p class="sub">Everything happens from one small window in Cavalry and one menu item in Cinema&nbsp;4D.</p>
+    <div class="grid2">
+      <div class="card">
+        <span class="tag">Cavalry → Cinema 4D</span>
+        <h3>Send shapes</h3>
+        <ol class="steps" style="margin-top:12px">
+          <li><strong>Select layers or groups in Cavalry</strong><span>Any shape works: primitives, text, editable shapes, duplicators.</span></li>
+          <li><strong>Optional: tick Animation (PSR)</strong><span>Each layer then arrives as its own Cavalry Spline with its keyframes, grouped under a Null.</span></li>
+          <li><strong>Click Send Selected to C4D</strong><span>A new Cavalry Spline appears in the active C4D document.</span></li>
+        </ol>
+      </div>
+      <div class="card">
+        <span class="tag">Cinema 4D → Cavalry</span>
+        <h3>Stream splines</h3>
+        <ol class="steps" style="margin-top:12px">
+          <li><strong>Select splines in Cinema 4D</strong><span>Any spline or spline generator (Text, Circle, Star…).</span></li>
+          <li><strong>Run Extensions › User Scripts › Cavalry Bridge Setup</strong><span>This adds a "Cavalry Bridge" null whose tag lists them.</span></li>
+          <li><strong>Click Connect in Cavalry</strong><span>Editable shapes appear and follow your changes.</span></li>
+        </ol>
+      </div>
+    </div>
+
+    <h3 style="margin-top:34px">The C4D Bridge window in Cavalry</h3>
+    <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <tr><th>Control</th><th>What it does</th></tr>
+        <tr><td>Connect</td><td>Starts receiving from Cinema 4D (about 30 updates a second).</td></tr>
+        <tr><td>Mode</td><td><b>Screen</b> places shapes as the C4D camera sees them. <b>World XY</b> uses C4D's X/Y coordinates.</td></tr>
+        <tr><td>Rotation · Perspective scale</td><td>For non-spline objects: also follow rotation, and shrink with distance from the camera.</td></tr>
+        <tr><td>Record keys</td><td>Keyframe incoming position, rotation and scale at the C4D frame, instead of only moving the layer.</td></tr>
+        <tr><td>Bind Selected</td><td>Drive your own Cavalry layer with a C4D object, instead of the placeholder the bridge creates.</td></tr>
+        <tr><td>Animation (PSR)</td><td>Send each layer's position, rotation and scale keyframes along with the shapes.</td></tr>
+        <tr><td>Send Selected to C4D</td><td>Send the selected layers to Cinema 4D.</td></tr>
+      </table>
+    </div>
+
+    <h3 style="margin-top:30px">The Cavalry Spline object in Cinema 4D</h3>
+    <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <tr><th>Setting</th><th>What it does</th></tr>
+        <tr><td>Follow Latest Send</td><td>Off for objects created by a send: they keep their own copy of the shapes. A Cavalry Spline added from the menu has it on, and always shows whatever was sent last.</td></tr>
+        <tr><td>Cavalry Layers</td><td>Comma-separated layer names, to keep only some layers. Leave empty for all.</td></tr>
+        <tr><td>Scale</td><td>Cavalry pixels per Cinema 4D unit (default 1).</td></tr>
+        <tr><td>Plane · Reverse · Intermediate Points</td><td>The same settings as Cinema 4D's own spline objects.</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="alt">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="sub">A small web server inside Cinema&nbsp;4D, on <code>127.0.0.1:1234</code> (this computer only). The Cavalry script talks to it: it asks for C4D's splines and transforms, and posts shapes to it.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 900 300" role="img" aria-label="Cavalry's C4D Bridge script talks to a server inside the Cinema 4D plugin over 127.0.0.1:1234">
+        <defs>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent-2)"/></marker>
+        </defs>
+        <!-- Cavalry -->
+        <rect class="box" x="10" y="40" width="250" height="220" rx="14"/>
+        <text class="boxtitle" x="30" y="72">Cavalry</text>
+        <text class="boxtext" x="30" y="96">C4D Bridge.js (script window)</text>
+        <text class="boxtext" x="30" y="126">• Timer: GET /state ~30×/s</text>
+        <text class="boxtext" x="30" y="148">• editable shapes / layers</text>
+        <text class="boxtext" x="30" y="178">• Send: outlines, transforms,</text>
+        <text class="boxtext" x="42" y="196">keyframes + per-frame samples</text>
+        <text class="boxtext" x="30" y="226">WebClient → 127.0.0.1:1234</text>
+        <!-- C4D -->
+        <rect class="box" x="560" y="20" width="330" height="260" rx="14"/>
+        <text class="boxtitle" x="580" y="52">Cinema 4D: cavalry_bridge plugin</text>
+        <rect class="pill" x="580" y="66" width="290" height="30" rx="8"/>
+        <text class="pilltext" x="594" y="86">HTTP server  127.0.0.1:1234</text>
+        <text class="boxtext" x="580" y="124">Cavalry Spline: spline generator,</text>
+        <text class="boxtext" x="592" y="142">one per send, data saved in the scene</text>
+        <text class="boxtext" x="580" y="170">Receiver: creates objects + PSR keys</text>
+        <text class="boxtext" x="592" y="188">on the main thread (curve fitting)</text>
+        <text class="boxtext" x="580" y="216">Cavalry Bridge tag: publishes linked</text>
+        <text class="boxtext" x="592" y="234">splines / transforms each redraw</text>
+        <text class="boxtext" x="592" y="252">(as the active camera sees them)</text>
+        <!-- wires -->
+        <path class="wire" d="M262 112 C 400 112, 420 100, 556 100" marker-end="url(#arrowB)"/>
+        <text class="wtext" x="320" y="96">GET /state</text>
+        <text class="wsub" x="320" y="128">← splines &amp; transforms (JSON)</text>
+        <path class="wire2" d="M262 190 C 400 190, 420 200, 556 200" marker-end="url(#arrowO)"/>
+        <text class="wtext" x="320" y="182">POST /shapes</text>
+        <text class="wsub" x="320" y="214">→ new Cavalry Spline(s)</text>
+      </svg>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3>Converting between the two apps</h3>
+        <ul>
+          <li><b>Coordinates:</b> both use Y up, and 1 Cavalry pixel = 1 C4D unit. Screen mode maps C4D's camera view (safe frame) onto the Cavalry composition.</li>
+          <li><b>Rotation:</b> Cavalry turns counter-clockwise, C4D's bank turns clockwise, so the sign flips.</li>
+          <li><b>Curves:</b> Cavalry stores Bézier handles as absolute points. C4D's spline tangents are relative, and ¾ the length of a standard Bézier handle (C4D's own circle uses 41.4 for radius 100, not 55.2).</li>
+          <li><b>Layer transforms:</b> Cavalry draws a layer at position + rotation · scale · (local − pivot), so with animation the outline is sent relative to the pivot.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Rebuilding the animation</h3>
+        <p>Cavalry's scripting API returns each keyframe's value and easing name, but not its curve handles. So the bridge measures the curve: it sends every key plus the value on every frame in between. Cinema&nbsp;4D then picks, for each segment, the handle length and height whose Bézier curve best fits those samples. That's how an animator shapes an ease by hand.</p>
+        <ul>
+          <li>Linear and Slow In/Out land on the original two keys, within 0.02 px over a 300 px move.</li>
+          <li>Stronger eases fit within 0.5%, or an invisible 0.25 px.</li>
+          <li>Anything one curve can't follow (Bounce, Spring) gets a key on every frame, for that stretch only.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="story">
+  <div class="wrap">
+    <h2>How it was built</h2>
+    <p class="sub">The bridge was built in one long session: tested live in both apps at every step, with plenty of dead ends. These are the main steps, including the ones that broke. Orange dots mark problems.</p>
+    <ol class="timeline">
+      <li>
+        <h3>"Is a bridge even possible?"</h3>
+        <p>Both apps can be scripted (Python in Cinema&nbsp;4D, JavaScript in Cavalry), so the options were file exchange, a person in the loop, or a live socket. Cavalry's documentation showed a built-in <code>WebServer</code> and <code>WebClient</code>, so the live route looked possible.</p>
+      </li>
+      <li class="problem">
+        <h3>Cavalry as the server: a freeze, then silence</h3>
+        <p>A first test started Cavalry's <code>WebServer</code> from an automation script. Cinema&nbsp;4D could reach it in 1–4&nbsp;ms, but only via <code>localhost</code>/IPv6 (<code>127.0.0.1</code> timed out), and Cavalry itself froze and had to be force-closed. From a proper script window, <code>listen()</code> then never opened the port at all.</p>
+        <span class="lesson"><b>Lesson:</b> the real cause turned out to be a security prompt (see below), but reversing the design made the bridge simpler and easier to test anyway.</span>
+      </li>
+      <li>
+        <h3>Reversed: Cinema 4D serves, Cavalry polls</h3>
+        <p>A Python tag in Cinema&nbsp;4D now runs a small HTTP server and publishes what the active camera sees. Cavalry polls it with a <code>Timer</code> and <code>WebClient</code>, which Cavalry's docs recommend for polling web APIs. A fetch took 18&nbsp;ms on the first try.</p>
+      </li>
+      <li class="problem">
+        <h3>Nothing arrived, but no errors either</h3>
+        <p>The script window made no requests at all. The cause was Cavalry asking <i>"…makes Web API calls. Do you trust this script?"</i> when it opens: until you trust a script, its network calls quietly do nothing. Once trusted, cubes animated in C4D moved Cavalry layers to matching positions and rotations.</p>
+        <span class="lesson"><b>Lesson:</b> the install guide now mentions the trust prompt first.</span>
+      </li>
+      <li>
+        <h3>Cavalry shapes to C4D splines</h3>
+        <p>Any Cavalry shape (text, star, duplicator) can be turned into points by making a temporary editable copy and reading its path in world space. One catch: making that copy hides the original layer, so the bridge restores its visibility afterwards.</p>
+      </li>
+      <li class="problem">
+        <h3>Ellipses looked boxy</h3>
+        <p>Sampling showed C4D's curve bulging outwards. C4D's own Circle has tangents of 41.4 for radius 100, where a standard Bézier handle is 55.2: C4D tangents are ¾ as long. With that scaling the ellipse matched the true curve to within 0.01 units.</p>
+      </li>
+      <li class="problem">
+        <h3>From Python Generator to a real spline object</h3>
+        <p>The first receiver was a Python Generator, but Extrude and Sweep need a true spline. The bridge became a proper plugin with its own spline object. The first version drew everything 3× too large and eventually froze C4D: its two setting IDs (1000 and 1001) clashed with the IDs of C4D's built-in spline settings, so Scale was reading the Intermediate Points value. Moving them to 10000+ fixed both.</p>
+        <span class="lesson"><b>Lesson:</b> when a plugin includes C4D's own spline settings, keep its setting IDs well away from theirs.</span>
+      </li>
+      <li>
+        <h3>One object per send, saved in the scene</h3>
+        <p>At first every send replaced the same object, and the shapes only lived in memory. Now each send creates its own Cavalry Spline that stores its shapes inside the object, so they survive saving and reopening the scene. The object is created on C4D's main thread, which the server notifies when shapes arrive.</p>
+      </li>
+      <li>
+        <h3>Position, rotation and scale animation</h3>
+        <p>Cavalry's keyframes give values and easing names, but no handles. The bridge samples the motion and fits Bézier handles to it, length as well as height. With handle length fixed at a third, Slow In/Out fell back to keys on every frame; letting the length vary brought every ease back to its original two keys.</p>
+      </li>
+      <li class="problem">
+        <h3>Phantom duplicates in Cavalry</h3>
+        <p>During the C4D → Cavalry tests, each spline suddenly had two Cavalry layers. Viewport captures render a temporary copy of the document, and the tag had published that copy's objects, whose IDs differ. The tag now publishes only from the active document.</p>
+      </li>
+      <li>
+        <h3>An installer that finds both apps</h3>
+        <p>First a batch file, then, as requested, a real <code>.exe</code>. It's compiled with the C# compiler that comes with Windows, and all the files travel inside it. It finds each Cinema&nbsp;4D version that has been started and Cavalry, and installs into their user folders without admin rights. The first build's window overlapped on a high-DPI display, so the layout now scales with the screen's DPI.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="faq" class="alt">
+  <div class="wrap">
+    <h2>Limits &amp; troubleshooting</h2>
+    <p class="sub">What the bridge doesn't do (yet), and what to check when something doesn't arrive.</p>
+    <div class="grid2">
+      <div>
+        <details open><summary>Nothing arrives in Cinema 4D</summary>
+          <ul>
+            <li>Restart Cinema 4D after installing: plugins only load at startup.</li>
+            <li>In Cavalry, reopen the C4D Bridge window and accept the trust prompt.</li>
+            <li>The status line under "Send Selected to C4D" says whether C4D was reachable.</li>
+          </ul></details>
+        <details><summary>Cavalry says "C4D not reachable"</summary>
+          <p>Cinema 4D must be running with the plugin loaded. If another program uses port 1234, change the port on the Cavalry Bridge tag (Port) and in the Cavalry window.</p></details>
+        <details><summary>Keyframes land between frames</summary>
+          <p>Timing is kept in seconds. If Cavalry is at 25 fps and C4D at 30 fps, Cavalry frame 92 becomes C4D frame 110.4. Use the same frame rate in both for keys on whole frames.</p></details>
+        <details><summary>Shapes don't line up in Screen mode</summary>
+          <p>Give the C4D render the same aspect ratio as the Cavalry composition. Screen mode follows whatever camera the active viewport looks through.</p></details>
+      </div>
+      <div>
+        <details open><summary>Current limits</summary>
+          <ul>
+            <li>Outlines only: fills, gradients, stroke widths and effects don't transfer, and strokes arrive as their centre line.</li>
+            <li>Only each layer's own animated transform. Parent groups' transforms and behaviour-driven motion (Noise, Oscillator) aren't included.</li>
+            <li>Animated outlines (text animators, trims) arrive as they look at the playhead frame.</li>
+            <li>C4D → Cavalry: splines aren't keyframed in Cavalry. Cubic, Akima and B-spline curves are sent as many straight segments.</li>
+            <li>Windows only for now. The scripts themselves aren't Windows-specific.</li>
+          </ul></details>
+        <details><summary>Is it safe?</summary>
+          <p>The server only listens on <code>127.0.0.1</code>, so other computers can't reach it. Setup writes only to your own user folders and never needs admin rights. Uninstall removes everything.</p></details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="source">
+  <div class="wrap">
+    <h2>Build from source</h2>
+    <p class="sub">Everything is plain text: Python for Cinema&nbsp;4D, JavaScript for Cavalry, C# for the installer. One command rebuilds the setup program.</p>
+    <div class="grid2">
+      <pre><code>cavalry_bridge/                  Cinema 4D plugin
+  cavalry_bridge.pyp             Cavalry Spline + receiver
+  cavalry_bridge_server.py       local HTTP server
+  cavalry_bridge_anim.py         keyframes + curve fitting
+  res/                           settings, strings, icon
+c4d_bridge_tag.py                Cavalry Bridge tag code
+install_c4d_bridge.py            "Cavalry Bridge Setup" script
+C4D Bridge.js                    Cavalry script window
+installer/                       Setup.cs, manifest, icon
+build_installer.ps1              builds dist\CavalryBridgeSetup-x.y.z.exe
+docs/                            this page</code></pre>
+      <div>
+        <p>Requires Windows with .NET Framework 4.x (built in), and nothing else:</p>
+        <pre><code>powershell -ExecutionPolicy Bypass -File build_installer.ps1</code></pre>
+        <p style="color:var(--muted)">The setup also runs from the command line: <code>/silent</code>, <code>/uninstall</code>, <code>/log &lt;file&gt;</code>.</p>
+        <div class="note">The plugin uses Maxon's test plugin IDs (1000001, 1000002). Register unique IDs at developers.maxon.net before publishing builds widely.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Cavalry Bridge 1.0.0 · <a data-repo href="">Source on GitHub</a></span>
+    <span>Cinema 4D is a trademark of Maxon. Cavalry is made by Scene Group / Canva. This project isn't affiliated with either.</span>
+  </div>
+</footer>
+
+<script>
+  // The repository address, used by every "GitHub" / "Download" link.
+  const REPO = "https://github.com/Sakabatou/cavalry-bridge";
+  document.querySelectorAll("[data-repo]").forEach(a => { a.href = REPO + (a.dataset.repo || ""); });
+
+  // Light / dark switch (remembered in this browser).
+  const root = document.documentElement, key = "cb-theme";
+  try { const saved = localStorage.getItem(key); if (saved) root.dataset.theme = saved; } catch (e) {}
+  document.getElementById("theme").addEventListener("click", () => {
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem(key, root.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

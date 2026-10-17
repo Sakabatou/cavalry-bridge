@@ -1,0 +1,13 @@
+# Build output - the setup .exe is published as a GitHub Release, not committed
+dist/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# OS / editor clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.claude/
