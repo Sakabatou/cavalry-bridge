@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="1.0.0.0" name="CavalryBridge.Setup"/>
+  <assemblyIdentity version="1.0.1.0" name="CavalryBridge.Setup"/>
   <!-- Installs into the user's own folders: run as the user, never elevated.
        (Without this, Windows treats any exe named "Setup" as needing admin
        rights, and an elevated setup could write into the wrong user's folders.) -->

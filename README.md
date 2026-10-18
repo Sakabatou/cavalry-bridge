@@ -70,7 +70,7 @@ docs/                      project page (GitHub Pages)
 - Animation covers each layer's own position, rotation and scale keyframes. Parent groups' transforms and behaviour-driven motion aren't included.
 - If the two apps run at different frame rates, keyframes keep their timing in seconds, so they can land between frames.
 - Windows only for now.
-- The plugin uses Maxon's **test plugin IDs** (1000001, 1000002). Register unique IDs at developers.maxon.net before distributing it widely.
+- Plugin IDs are registered with Maxon: **1071603** (Cavalry Spline) and **1071604** (receiver). Scenes made with the 1.0.0 test-ID build won't load their Cavalry Splines in 1.0.1; send the shapes again.
 
 ---
 

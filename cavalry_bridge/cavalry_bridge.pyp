@@ -28,10 +28,10 @@ if PLUGIN_DIR not in sys.path:
 import cavalry_bridge_anim as anim  # noqa: E402
 import cavalry_bridge_server as server  # noqa: E402
 
-# 1000001-1000010 is Maxon's range for testing. Get unique IDs from
-# developers.maxon.net before giving this plugin to anyone else.
-PLUGIN_ID = 1000001                          # Cavalry Spline object
-RECEIVER_ID = server.SHAPES_RECEIVED         # 1000002, MessageData
+# Plugin IDs registered at developers.maxon.net. The object ID is stored in
+# every scene that contains a Cavalry Spline, so it must never change.
+PLUGIN_ID = 1071603                          # Cavalry Spline object ("Cavalry Bridge")
+RECEIVER_ID = server.SHAPES_RECEIVED         # 1071604, MessageData ("CavalryBridgeReceiver")
 
 # Private container ID holding a send's shapes as JSON (not in the
 # description, so it is saved and copied with the object but not shown).

@@ -17,8 +17,9 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1234
 
 # Core message sent when shapes arrive; the plugin's MessageData (registered
-# under this ID) turns each send into a new Cavalry Spline object.
-SHAPES_RECEIVED = 1000002
+# under this ID at developers.maxon.net as "CavalryBridgeReceiver") turns each
+# send into a new Cavalry Spline object.
+SHAPES_RECEIVED = 1071604
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
