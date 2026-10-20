@@ -4,6 +4,8 @@
 # server (GET /state), for the "C4D Bridge" script in Cavalry to poll:
 # splines (including generators such as Circle, Text or Cavalry Spline) as
 # their Bezier geometry, other objects as world and screen-space transforms.
+# Objects with children (a Null "folder", say) bring their whole hierarchy
+# along; each entry names its parent so Cavalry can rebuild it as groups.
 # Needs the cavalry_bridge plugin, which runs that server.
 #
 # The state is computed in the tag's draw() callback (main thread, active
@@ -117,36 +119,61 @@ def draw(bd):
     frame_w = max(sf["cr"] - sf["cl"], 1)
     frame_h = max(sf["cb"] - sf["ct"], 1)
 
-    objects = []
-    for i in range(inex.GetObjectCount()):
-        obj = inex.ObjectFromIndex(doc, i)
-        if obj is None:
-            continue
+    def entry(obj, parent):
+        """The object itself: geometry for splines, a transform otherwise."""
         mg = obj.GetMg()
         p = mg.off
+        base = {"id": str(obj.GetGUID()), "name": obj.GetName(), "parent": parent,
+                "visible": obj.GetEditorMode() != c4d.MODE_OFF, "depth": (cam_inv * p).z}
+        spline = _spline_data(obj, bd, sf)
+        if spline is not None:
+            # Splines travel as geometry; Cavalry draws them as editable shapes.
+            base.update(kind="spline", spline=spline)
+            return base
         hpb = c4d.utils.MatrixToHPB(mg)
         sx, sy = _to_frame(bd, sf, p)
         # Screen-space rotation/size from the projected local X axis
         # (100 scene units long), so perspective is taken into account.
         ax, ay = _to_frame(bd, sf, p + mg.v1.GetNormalized() * 100.0)
         dx, dy = (ax - sx) * frame_w, (ay - sy) * frame_h
-        spline = _spline_data(obj, bd, sf)
-        if spline is not None:
-            # Splines travel as geometry; Cavalry draws them as editable shapes.
-            objects.append({"id": str(obj.GetGUID()), "name": obj.GetName(),
-                            "depth": (cam_inv * p).z, "spline": spline})
-            continue
-        objects.append({
-            "id": str(obj.GetGUID()),
-            "name": obj.GetName(),
-            "pos": [p.x, p.y, p.z],
-            "rot": [math.degrees(hpb.x), math.degrees(hpb.y), math.degrees(hpb.z)],
-            "scale": [mg.v1.GetLength(), mg.v2.GetLength(), mg.v3.GetLength()],
-            "screen": [sx, sy],
-            "screenRot": math.degrees(math.atan2(-dy, dx)),
-            "screenScale": math.hypot(dx, dy) / frame_w,  # frame widths per 100 units
-            "depth": (cam_inv * p).z,
-        })
+        base.update(kind="object",
+                    pos=[p.x, p.y, p.z],
+                    rot=[math.degrees(hpb.x), math.degrees(hpb.y), math.degrees(hpb.z)],
+                    scale=[mg.v1.GetLength(), mg.v2.GetLength(), mg.v3.GetLength()],
+                    screen=[sx, sy],
+                    screenRot=math.degrees(math.atan2(-dy, dx)),
+                    screenScale=math.hypot(dx, dy) / frame_w)  # frame widths per 100 units
+        return base
+
+    # Linked objects with children travel as folders: Cavalry rebuilds the
+    # hierarchy as groups. A folder is purely structural (no transform of its
+    # own), because the geometry already arrives in world / screen space. A
+    # spline that has children shows up inside its own folder.
+    objects = []
+    seen = set()
+
+    def walk(obj, parent):
+        guid = str(obj.GetGUID())
+        if guid in seen:   # linked twice, or also inside another linked folder
+            return
+        seen.add(guid)
+        children = obj.GetChildren()
+        if not children:
+            objects.append(entry(obj, parent))
+            return
+        folder = guid + "#folder"
+        objects.append({"id": folder, "name": obj.GetName(), "parent": parent, "kind": "folder",
+                        "visible": obj.GetEditorMode() != c4d.MODE_OFF})
+        if obj.GetRealSpline() is not None:
+            # Other parents (Nulls, generators) need no layer of their own.
+            objects.append(entry(obj, folder))
+        for child in children:
+            walk(child, folder)
+
+    for i in range(inex.GetObjectCount()):
+        obj = inex.ObjectFromIndex(doc, i)
+        if obj is not None:
+            walk(obj, None)
 
     srv.state = json.dumps({
         "frame": doc.GetTime().GetFrame(doc.GetFps()),

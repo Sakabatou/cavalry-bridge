@@ -5,17 +5,20 @@
 # Selected to C4D". Being a real spline object it works directly in Extrude,
 # Sweep, Loft, Lathe, MoSpline..., has the usual Plane / Reverse /
 # Intermediate Points settings, and Make Editable (C) turns it into a plain
-# spline.
+# spline. Its Width / Height are lengths, like a Rectangle's, so the Scale
+# tool and the Coordinate Manager resize it in Model mode like a primitive.
 #
-# Every send from Cavalry creates a new Cavalry Spline in the active
-# document, holding its own copy of the shapes (saved with the scene). With
-# "Animation (PSR)" on in Cavalry, every layer becomes its own Cavalry Spline
-# with the layer's position / rotation / scale keys (cavalry_bridge_anim.py). A
-# Cavalry Spline created from the menu has "Follow Latest Send" on instead,
+# Every send from Cavalry creates new objects in the active document, each
+# holding its own copy of the shapes (saved with the scene):
+#   - "Single object": one Cavalry Spline with all the outlines;
+#   - "Group": Cavalry's folders (groups) become Nulls and every shape its own
+#     Cavalry Spline, each with its layer's position / rotation / scale and,
+#     with "Animation (PSR)" on, their keyframes (cavalry_bridge_anim.py).
+# A Cavalry Spline created from the menu has "Follow Latest Send" on instead,
 # and always shows whatever was sent last.
 #
 # Also starts the bridge's local HTTP server (cavalry_bridge_server.py) when
-# Cinema 4D starts, so Cavalry can send shapes at any time.
+# Cinema 4D starts, so Cavalry can connect and send at any time.
 import json
 import os
 import sys
@@ -56,6 +59,16 @@ def _wanted(shape, names):
     return not names or shape.get("name", "").strip().lower() in names
 
 
+def natural_size(shapes):
+    """Width and height of the outlines' points, as sent (before Width /
+    Height resize them)."""
+    xs = [p[0] for s in shapes for c in s.get("contours", []) for p in c.get("points", [])]
+    ys = [p[1] for s in shapes for c in s.get("contours", []) for p in c.get("points", [])]
+    if not xs:
+        return 0.0, 0.0
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
 class CavalrySpline(c4d.plugins.ObjectData):
 
     def __init__(self):
@@ -65,7 +78,8 @@ class CavalrySpline(c4d.plugins.ObjectData):
 
     def Init(self, op, isCloneInit=False):
         self.InitAttr(op, str, c4d.CAVALRYSPLINE_LAYERS)
-        self.InitAttr(op, float, c4d.CAVALRYSPLINE_SCALE)
+        self.InitAttr(op, float, c4d.CAVALRYSPLINE_WIDTH)
+        self.InitAttr(op, float, c4d.CAVALRYSPLINE_HEIGHT)
         self.InitAttr(op, bool, c4d.CAVALRYSPLINE_FOLLOW)
         self.InitAttr(op, int, c4d.PRIM_PLANE)
         self.InitAttr(op, bool, c4d.PRIM_REVERSE)
@@ -75,7 +89,8 @@ class CavalrySpline(c4d.plugins.ObjectData):
         self.InitAttr(op, float, c4d.SPLINEOBJECT_MAXIMUMLENGTH)
         if not isCloneInit:
             op[c4d.CAVALRYSPLINE_LAYERS] = ""
-            op[c4d.CAVALRYSPLINE_SCALE] = 1.0
+            op[c4d.CAVALRYSPLINE_WIDTH] = 0.0    # 0 = as sent
+            op[c4d.CAVALRYSPLINE_HEIGHT] = 0.0
             op[c4d.CAVALRYSPLINE_FOLLOW] = True
             op[c4d.PRIM_PLANE] = c4d.PRIM_PLANE_XY
             op[c4d.PRIM_REVERSE] = False
@@ -112,13 +127,22 @@ class CavalrySpline(c4d.plugins.ObjectData):
             return None
 
     def _contour(self, op):
+        shapes = self._shapes(op)
         names = {n.strip().lower() for n in (op[c4d.CAVALRYSPLINE_LAYERS] or "").split(",") if n.strip()}
-        contours = [c for shape in self._shapes(op) if _wanted(shape, names)
+        contours = [c for shape in shapes if _wanted(shape, names)
                     for c in shape.get("contours", []) if c.get("points")]
         if not contours:
             return None
 
-        scale = op[c4d.CAVALRYSPLINE_SCALE]
+        # Width / Height resize the outlines as sent (all layers, so picking
+        # layers doesn't change the size). 0 = as sent; scenes from 1.0.x
+        # used a plain Scale factor instead.
+        old_scale = op.GetDataInstance().GetFloat(c4d.CAVALRYSPLINE_SCALE, 1.0) or 1.0
+        nat_w, nat_h = natural_size(shapes)
+        width, height = op[c4d.CAVALRYSPLINE_WIDTH], op[c4d.CAVALRYSPLINE_HEIGHT]
+        fx = width / nat_w if width > 0 and nat_w > 1e-9 else old_scale
+        fy = height / nat_h if height > 0 and nat_h > 1e-9 else old_scale
+
         plane = op[c4d.PRIM_PLANE]
         reverse = op[c4d.PRIM_REVERSE]
         count = sum(len(c["points"]) for c in contours)
@@ -134,9 +158,9 @@ class CavalrySpline(c4d.plugins.ObjectData):
             for x, y, ix, iy, ox, oy in points:
                 if reverse:  # walking backwards swaps in and out handles
                     ix, iy, ox, oy = ox, oy, ix, iy
-                pos = c4d.Vector(x, y, 0) * scale
-                left = (c4d.Vector(ix, iy, 0) * scale - pos) * TANGENT_SCALE
-                right = (c4d.Vector(ox, oy, 0) * scale - pos) * TANGENT_SCALE
+                pos = c4d.Vector(x * fx, y * fy, 0)
+                left = (c4d.Vector(ix * fx, iy * fy, 0) - pos) * TANGENT_SCALE
+                right = (c4d.Vector(ox * fx, oy * fy, 0) - pos) * TANGENT_SCALE
                 spline.SetPoint(i, _to_plane(pos, plane))
                 spline.SetTangent(i, _to_plane(left, plane), _to_plane(right, plane))
                 i += 1
@@ -150,42 +174,65 @@ class CavalrySpline(c4d.plugins.ObjectData):
         return spline
 
 
+# ------------------------------------------------------- sends -> objects
+
 def _new_cavalry_spline(name, shapes):
-    """A Cavalry Spline holding its own copy of `shapes` (not inserted)."""
+    """A Cavalry Spline holding its own copy of `shapes` (not inserted),
+    sized to them and coloured like the Cavalry fill."""
     op = c4d.BaseObject(PLUGIN_ID)
     if op is None:
         return None
     op.SetName(name or "Cavalry Spline")
     op[c4d.CAVALRYSPLINE_FOLLOW] = False
-    # Animation and transform live on the object itself; store outlines only.
-    stored = [{k: v for k, v in s.items() if k not in ("anim", "transform")} for s in shapes]
+    keep = ("id", "name", "contours", "color")
+    stored = [{k: s[k] for k in keep if k in s} for s in shapes]
     op.GetDataInstance().SetString(SHAPES_DATA, json.dumps(stored, separators=(",", ":")))
+    op[c4d.CAVALRYSPLINE_WIDTH], op[c4d.CAVALRYSPLINE_HEIGHT] = natural_size(stored)
+    colors = [s["color"] for s in shapes if s.get("color")]
+    if colors:
+        op[c4d.ID_BASEOBJECT_USECOLOR] = c4d.ID_BASEOBJECT_USECOLOR_ALWAYS
+        op[c4d.ID_BASEOBJECT_COLOR] = c4d.Vector(*colors[0])
     return op
 
 
-def _add_send(doc, shapes):
-    """Turns one send into objects: a single Cavalry Spline, or with
-    animation one per layer (grouped under a null if there are several)."""
-    if any("transform" in s for s in shapes):
-        objs = []
-        for shape in shapes:
-            op = _new_cavalry_spline(shape.get("name"), [shape])
-            if op is None:
-                continue
-            scale = op[c4d.CAVALRYSPLINE_SCALE]
-            if "transform" in shape:
-                anim.apply_static(op, shape["transform"], scale)
-            if "anim" in shape:
-                anim.apply_animation(op, shape["anim"], scale)
-            objs.append(op)
-        if len(objs) == 1:
-            top = objs[0]
+def _build_node(node):
+    """One sent layer (and its children) as C4D objects: folders become
+    Nulls, shapes Cavalry Splines; each gets its layer's transform and keys."""
+    if node.get("kind") == "folder":
+        op = c4d.BaseObject(c4d.Onull)
+        op.SetName(node.get("name") or "Group")
+    else:
+        op = _new_cavalry_spline(node.get("name"), [node])
+        if op is None:
+            return None
+    if "transform" in node:
+        anim.apply_static(op, node["transform"], 1.0)
+    if "anim" in node:
+        anim.apply_animation(op, node["anim"], 1.0)
+    for child in reversed(node.get("children", [])):  # InsertUnder prepends
+        child_op = _build_node(child)
+        if child_op is not None:
+            child_op.InsertUnder(op)
+    return op
+
+
+def _add_send(doc, send):
+    """Turns one send into objects and inserts them at the top of `doc`."""
+    if "tree" in send:
+        roots = [op for op in (_build_node(n) for n in send["tree"]) if op is not None]
+        if not roots:
+            return None
+        if len(roots) == 1:
+            top = roots[0]
         else:
             top = c4d.BaseObject(c4d.Onull)
-            top.SetName("Cavalry Animation (%d layers)" % len(objs))
-            for op in reversed(objs):  # InsertUnder prepends; keep Cavalry's order
+            top.SetName("Cavalry (%d layers)" % len(roots))
+            for op in reversed(roots):
                 op.InsertUnder(top)
     else:
+        shapes = send.get("shapes", [])
+        if not shapes:
+            return None
         name = shapes[0].get("name") if len(shapes) == 1 else "Cavalry Spline (%d layers)" % len(shapes)
         top = _new_cavalry_spline(name, shapes)
     if top is None:
@@ -199,19 +246,18 @@ def _add_send(doc, shapes):
 
 
 class ShapesReceiver(c4d.plugins.MessageData):
-    """Turns each send from Cavalry into a new Cavalry Spline (main thread)."""
+    """Turns each send from Cavalry into new objects (main thread)."""
 
     def CoreMessage(self, id, bc):
         if id == RECEIVER_ID:
             sends = server.take_pending()
             doc = c4d.documents.GetActiveDocument()
             if sends and doc is not None:
-                for shapes in sends:
-                    if shapes:
-                        try:
-                            _add_send(doc, shapes)
-                        except Exception as e:
-                            print("[Cavalry Bridge] could not add shapes: %s" % e)
+                for send in sends:
+                    try:
+                        _add_send(doc, send)
+                    except Exception as e:
+                        print("[Cavalry Bridge] could not add shapes: %s" % e)
                 c4d.EventAdd()
         return True
 

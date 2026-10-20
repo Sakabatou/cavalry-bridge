@@ -16,11 +16,12 @@ Send Cavalry shapes, with their animation, to Cinema&nbsp;4D as real splines. St
 
 | Direction | What happens |
 |---|---|
-| **Cavalry → Cinema 4D** | *Send Selected to C4D* creates a **Cavalry Spline**, a real spline object that works directly in Extrude, Sweep, Loft and Lathe. Holes in letters stay holes, and the shapes are saved with the scene. |
-| **…with animation** | With *Animation (PSR)* ticked, each layer arrives as its own Cavalry Spline with its position, rotation and scale **keyframes**. Eases are rebuilt as curve handles on the original keys. |
-| **Cinema 4D → Cavalry** | Splines linked to the bridge appear in Cavalry as **editable shapes that follow every change**, seen through the C4D camera or in world XY. Other objects drive a layer's position, rotation and scale. |
+| **Cavalry → Cinema 4D** | *Send Selected to C4D* creates **Cavalry Splines**, real spline objects that work directly in Extrude, Sweep, Loft and Lathe. Holes in letters stay holes, the shapes are saved with the scene, and the Scale tool resizes them like any primitive. |
+| **…as a group or one object** | *Send as: Group* rebuilds your **folders as Nulls**, each shape its own Cavalry Spline with its position, rotation, scale and pivot. *Send as: Single object* merges everything into one spline. |
+| **…with animation** | With *Animation (PSR)* ticked, layers and folders bring their position, rotation and scale **keyframes**. Eases are rebuilt as curve handles on the original keys. |
+| **Cinema 4D → Cavalry** | Splines and **whole folders** linked to the bridge appear in Cavalry as **editable shapes inside matching groups**, following every change (renames, moves, hiding) live, seen through the C4D camera or in world XY. |
 
-Everything runs on your own computer, over `127.0.0.1:1234`.
+The Cavalry window **connects by itself** whenever Cinema 4D is running. Everything stays on your own computer, over `127.0.0.1:1234`.
 
 ## Install
 
@@ -38,9 +39,9 @@ If Windows shows "Windows protected your PC" (the setup isn't code-signed yet), 
 
 ## Use
 
-**Cavalry → Cinema 4D:** select layers or groups in Cavalry. Optionally tick *Animation (PSR)*. Then click **Send Selected to C4D**.
+**Cavalry → Cinema 4D:** select layers or groups in Cavalry, choose *Send as* (Group or Single object), optionally tick *Animation (PSR)*, then click **Send Selected to C4D**.
 
-**Cinema 4D → Cavalry:** select splines in Cinema 4D, run **Extensions › User Scripts › Cavalry Bridge Setup**, then click **Connect** in Cavalry.
+**Cinema 4D → Cavalry:** select splines or folders (Nulls) in Cinema 4D and run **Extensions › User Scripts › Cavalry Bridge Setup**. The C4D Bridge window in Cavalry connects by itself.
 
 The [project page](https://sakabatou.github.io/cavalry-bridge/) explains every setting, how the bridge works, and how it was built.
 
@@ -56,7 +57,7 @@ This builds `dist\CavalryBridgeSetup-<version>.exe`, with every file it installs
 
 ```
 cavalry_bridge/            Cinema 4D plugin: Cavalry Spline, local server, keyframe fitting
-c4d_bridge_tag.py          Cavalry Bridge tag (publishes C4D splines and transforms)
+c4d_bridge_tag.py          Cavalry Bridge tag (publishes C4D splines, folders and transforms)
 install_c4d_bridge.py      "Cavalry Bridge Setup" script for Cinema 4D
 C4D Bridge.js              Cavalry script window
 installer/                 setup program source (C#), manifest, icon
@@ -67,10 +68,10 @@ docs/                      project page (GitHub Pages)
 ## Limits
 
 - Only outlines transfer. Fills, gradients, stroke widths and effects don't, and strokes arrive as their centre line.
-- Animation covers each layer's own position, rotation and scale keyframes. Parent groups' transforms and behaviour-driven motion aren't included.
+- Animation covers keyframed position, rotation and scale (with *Send as: Group*). Behaviour-driven motion (Noise, Oscillator) isn't included.
 - If the two apps run at different frame rates, keyframes keep their timing in seconds, so they can land between frames.
 - Windows only for now.
-- Plugin IDs are registered with Maxon: **1071603** (Cavalry Spline) and **1071604** (receiver). Scenes made with the 1.0.0 test-ID build won't load their Cavalry Splines in 1.0.1; send the shapes again.
+- Plugin IDs are registered with Maxon: **1071603** (Cavalry Spline) and **1071604** (receiver). Scenes made with the 1.0.0 test-ID build won't load their Cavalry Splines in later versions; send the shapes again.
 
 ---
 

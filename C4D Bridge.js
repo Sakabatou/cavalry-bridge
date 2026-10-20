@@ -1,29 +1,41 @@
-// C4D Bridge - live link from Cinema 4D.
+// C4D Bridge - live link between Cavalry and Cinema 4D.
 //
-// Polls the "Cavalry Bridge" Python Tag in Cinema 4D (which serves its
-// objects at http://127.0.0.1:<port>/state) and drives one Cavalry layer per
-// C4D object: C4D splines become editable shapes that follow the spline's
-// geometry, other objects drive a layer's position, rotation and scale. Open from Window > Scripts (it must run in a Script Window -
-// polling lasts as long as this window is open).
+// Cinema 4D -> Cavalry: polls the "Cavalry Bridge" tag in Cinema 4D (served
+// by the cavalry_bridge plugin at http://127.0.0.1:<port>/state) and drives
+// one Cavalry layer per C4D object. Splines become editable shapes that
+// follow the spline's geometry, other objects drive a layer's position,
+// rotation and scale, and C4D folders (objects with children) become groups,
+// so whole hierarchies come across.
+//
+// Cavalry -> Cinema 4D: "Send Selected to C4D" sends the selected layers.
+//   Group          folders become Nulls and every shape its own Cavalry
+//                  Spline, each with its layer's position / rotation / scale
+//                  (and, with "Animation (PSR)", their keyframes)
+//   Single object  everything merged into one Cavalry Spline
+//
+// The script connects by itself: the plugin keeps a presence file in the
+// temp folder while Cinema 4D runs, so the script knows when (and on which
+// port) to connect without blocking Cavalry on a refused connection.
 //
 // Layers are matched to C4D objects by the object's GUID, stored in the
-// layer's user data, so renaming either side doesn't break the link. Missing
-// layers are created as small placeholder circles inside a "C4D Bridge"
-// group; use "Bind Selected" to drive your own layer instead.
-//
-// The other way round, "Send Selected to C4D" posts the outlines of the
-// selected shapes to C4D, where each send becomes a new Cavalry Spline
-// object. With "Animation (PSR)" on, every layer becomes its own Cavalry
-// Spline carrying the layer's position / rotation / scale keyframes.
+// layer's user data, so renaming either side doesn't break the link. Use
+// "Bind Selected" to drive your own layer instead of the one the bridge makes.
 
-var BRIDGE_KEY = "c4dBridgeId";
-var GROUP_KEY = "c4dBridgeGroup";
+var BRIDGE_KEY = "c4dBridgeId";      // user data: C4D GUID this layer follows
+var AUTO_KEY = "c4dBridgeAuto";      // user data: layer was created by the bridge
+var GROUP_KEY = "c4dBridgeGroup";    // user data: the "C4D Bridge" group
+var PRESENCE_FILE = api.getTempFolder() + "/cavalry_bridge_c4d.json";
+
+// Layers that are folders even without children.
+var FOLDER_TYPES = { group: 1, "null": 1, layoutGroup: 1, gridLayoutGroup: 1, schedulingGroup: 1 };
 
 // ---------------------------------------------------------------- core
 
 var bridge = {
-    layerFor: {},     // C4D GUID -> Cavalry layer id
-    names: {},        // C4D GUID -> C4D object name (last seen)
+    layerFor: {},       // C4D GUID -> Cavalry layer id
+    names: {},          // C4D GUID -> C4D object name (last seen)
+    hiddenByBridge: {}, // C4D GUID -> true when hidden because it left the C4D scene
+    groupId: null,
     packets: 0,
     lastFrame: null,
     options: {
@@ -36,14 +48,26 @@ var bridge = {
     }
 };
 
+// Cinema 4D's presence file ({port, pid, started}), or null when it isn't running.
+bridge.presence = function () {
+    try {
+        if (!api.filePathExists(PRESENCE_FILE)) return null;
+        var p = JSON.parse(api.readFromFile(PRESENCE_FILE));
+        return p && p.port ? p : null;
+    } catch (e) {
+        return null;
+    }
+};
+
 bridge.findGroup = function () {
+    if (bridge.groupId && api.layerExists(bridge.groupId)) return bridge.groupId;
     var all = api.getAllSceneLayers();
     for (var i = 0; i < all.length; i++) {
-        if (api.hasUserDataKey(all[i], GROUP_KEY)) return all[i];
+        if (api.hasUserDataKey(all[i], GROUP_KEY)) return (bridge.groupId = all[i]);
     }
-    var g = api.create("group", "C4D Bridge");
-    api.setUserData(g, GROUP_KEY, true);
-    return g;
+    bridge.groupId = api.create("group", "C4D Bridge");
+    api.setUserData(bridge.groupId, GROUP_KEY, true);
+    return bridge.groupId;
 };
 
 bridge.rescan = function () {
@@ -51,9 +75,14 @@ bridge.rescan = function () {
     var all = api.getAllSceneLayers();
     for (var i = 0; i < all.length; i++) {
         if (api.hasUserDataKey(all[i], BRIDGE_KEY)) {
-            bridge.layerFor[api.getUserDataKey(all[i], BRIDGE_KEY)] = all[i];
+            var guid = api.getUserDataKey(all[i], BRIDGE_KEY);
+            if (guid) bridge.layerFor[guid] = all[i];
         }
     }
+};
+
+bridge.isAuto = function (id) {
+    return api.hasUserDataKey(id, AUTO_KEY) && api.getUserDataKey(id, AUTO_KEY);
 };
 
 bridge.layerForObject = function (obj) {
@@ -63,13 +92,16 @@ bridge.layerForObject = function (obj) {
     id = bridge.layerFor[obj.id];
     if (id) return id;
     if (!bridge.options.create) return null;
-    if (obj.spline) {
+    if (obj.kind === "folder") {
+        id = api.create("group", obj.name);
+    } else if (obj.spline) {
         id = api.create("editableShape", obj.name);
     } else {
         id = api.primitive("ellipse", obj.name);
         api.set(id, { "generator.radius": [20, 20] });
     }
     api.setUserData(id, BRIDGE_KEY, obj.id);
+    api.setUserData(id, AUTO_KEY, true);
     api.parent(id, bridge.findGroup());
     bridge.layerFor[obj.id] = id;
     return id;
@@ -120,45 +152,76 @@ bridge.applySpline = function (id, obj, res) {
     }
 };
 
-bridge.apply = function (packet) {
+bridge.applyTransform = function (id, obj, res, frame) {
     var o = bridge.options;
+    var x, y, rot, sx, sy;
+    if (o.mode === 0) {
+        if (obj.depth <= 0) return;   // behind the camera
+        x = (obj.screen[0] - 0.5) * res.x;
+        y = (0.5 - obj.screen[1]) * res.y;
+        rot = obj.screenRot;
+        var k = o.perspectiveScale ? obj.screenScale * res.x / 100 : 1;
+        sx = obj.scale[0] * k;
+        sy = obj.scale[1] * k;
+    } else {
+        x = obj.pos[0] * o.worldScale;
+        y = obj.pos[1] * o.worldScale;
+        rot = -obj.rot[2];   // C4D bank is clockwise seen from the default camera
+        sx = obj.scale[0];
+        sy = obj.scale[1];
+    }
+    var values = { "position.x": x, "position.y": y, "scale.x": sx, "scale.y": sy };
+    if (o.rotation) values["rotation.z"] = rot;
+    if (o.record) {
+        api.keyframe(id, frame, values);
+    } else {
+        var set = { position: [x, y], scale: [sx, sy] };
+        if (o.rotation) set.rotation = rot;
+        api.set(id, set);
+    }
+};
+
+bridge.isRootParent = function (parent) {
+    return !parent || parent === api.getActiveComp() || api.getLayerType(parent) === "compNode";
+};
+
+bridge.apply = function (packet) {
     var res = api.get(api.getActiveComp(), "resolution");
     var objects = packet.objects || [];
+    var seen = {};
     for (var i = 0; i < objects.length; i++) {
         var obj = objects[i];
+        seen[obj.id] = true;
         bridge.names[obj.id] = obj.name;
         var id = bridge.layerForObject(obj);
         if (!id) continue;
-        if (obj.spline) {
-            bridge.applySpline(id, obj, res);
-            continue;
+        if (bridge.isAuto(id)) {
+            // Layers the bridge made mirror the C4D object's name and visibility.
+            if (api.getNiceName(id) !== obj.name) api.rename(id, obj.name);
+            var hide = obj.visible === false;
+            if (!!api.get(id, "hidden") !== hide) api.set(id, { hidden: hide });
+            delete bridge.hiddenByBridge[obj.id];
         }
-
-        var x, y, rot, sx, sy;
-        if (o.mode === 0) {
-            if (obj.depth <= 0) continue;   // behind the camera
-            x = (obj.screen[0] - 0.5) * res.x;
-            y = (0.5 - obj.screen[1]) * res.y;
-            rot = obj.screenRot;
-            var k = o.perspectiveScale ? obj.screenScale * res.x / 100 : 1;
-            sx = obj.scale[0] * k;
-            sy = obj.scale[1] * k;
-        } else {
-            x = obj.pos[0] * o.worldScale;
-            y = obj.pos[1] * o.worldScale;
-            rot = -obj.rot[2];   // C4D bank is clockwise seen from the default camera
-            sx = obj.scale[0];
-            sy = obj.scale[1];
-        }
-
-        var values = { "position.x": x, "position.y": y, "scale.x": sx, "scale.y": sy };
-        if (o.rotation) values["rotation.z"] = rot;
-        if (o.record) {
-            api.keyframe(id, packet.frame, values);
-        } else {
-            var set = { position: [x, y], scale: [sx, sy] };
-            if (o.rotation) set.rotation = rot;
-            api.set(id, set);
+        if (obj.kind === "folder") continue;
+        if (obj.spline) bridge.applySpline(id, obj, res);
+        else bridge.applyTransform(id, obj, res, packet.frame);
+    }
+    // Rebuild the C4D hierarchy: each layer the bridge made goes into the
+    // group of its C4D parent (or the "C4D Bridge" group at the top).
+    for (var j = 0; j < objects.length; j++) {
+        var lid = bridge.layerFor[objects[j].id];
+        if (!lid || !api.layerExists(lid) || !bridge.isAuto(lid)) continue;
+        var parentLayer = objects[j].parent && bridge.layerFor[objects[j].parent];
+        var want = parentLayer && api.layerExists(parentLayer) ? parentLayer : bridge.findGroup();
+        if (api.getParent(lid) !== want) api.parent(lid, want);
+    }
+    // Objects removed from the C4D scene: hide (never delete) their layers.
+    for (var guid in bridge.layerFor) {
+        if (seen[guid] || bridge.hiddenByBridge[guid]) continue;
+        var gone = bridge.layerFor[guid];
+        if (api.layerExists(gone) && bridge.isAuto(gone) && !api.get(gone, "hidden")) {
+            api.set(gone, { hidden: true });
+            bridge.hiddenByBridge[guid] = true;
         }
     }
     bridge.packets++;
@@ -167,17 +230,27 @@ bridge.apply = function (packet) {
 
 // ------------------------------------------------- Cavalry -> C4D shapes
 
-// C4D stores each send inside its Cavalry Spline, so keep the numbers short.
+// C4D stores each send inside its Cavalry Splines, so keep the numbers short.
 function round3(v) {
     return Math.round(v * 1000) / 1000;
 }
 
+var PSR_ATTRS = ["position.x", "position.y", "rotation.z", "scale.x", "scale.y"];
+
+bridge.transformValues = function (id) {
+    var p = api.get(id, "position"), r = api.get(id, "rotation"), s = api.get(id, "scale");
+    return { "position.x": p.x, "position.y": p.y, "rotation.z": r.z, "scale.x": s.x, "scale.y": s.y };
+};
+
+bridge.isFolder = function (id) {
+    return !!FOLDER_TYPES[api.getLayerType(id)] || (!api.isShape(id) && api.getChildren(id).length > 0);
+};
+
 // Outline of one shape layer: a temporary editable copy gives the final
 // geometry for any shape type (primitives, text, duplicators...). In world
 // space by default; with `local`, in the layer's own space relative to its
-// pivot (world = position + rotation * scale * (local - pivot)), for sending
-// together with the layer's transform and its animation.
-bridge.shapeData = function (id, local) {
+// pivot (world = position + rotation * scale * (local - pivot)).
+bridge.contours = function (id, local) {
     var wasHidden = api.get(id, "hidden");
     var copy = api.makeEditable(id, true);
     var path;
@@ -201,42 +274,89 @@ bridge.shapeData = function (id, local) {
         }
         contours.push({ closed: !!path[c].isClosed, points: points });
     }
-    var shape = { id: id, name: api.getNiceName(id), contours: contours };
+    return contours;
+};
+
+bridge.color = function (id) {
     var col = api.get(id, "material.materialColor");
-    if (col && col.r !== undefined) shape.color = [col.r / 255, col.g / 255, col.b / 255];
-    if (local) {
-        var t = bridge.transformValues(id);
-        shape.transform = {
-            pos: [t["position.x"], t["position.y"]],
+    return col && col.r !== undefined ? [col.r / 255, col.g / 255, col.b / 255] : null;
+};
+
+// One layer as a node of the sent hierarchy. Position is relative to the
+// parent's pivot, so C4D can rebuild the layer as a child object:
+// world = parent * (position - parent pivot + rotation * scale * (local - pivot)).
+// `shallow`: just a folder with the layer's transform (for unselected parents).
+bridge.node = function (id, parentPivot, shallow) {
+    if (api.get(id, "hidden")) return null;
+    var t = bridge.transformValues(id);
+    var node = {
+        id: id,
+        name: api.getNiceName(id),
+        kind: shallow || bridge.isFolder(id) ? "folder" : "shape",
+        parentPivot: [parentPivot.x, parentPivot.y],
+        transform: {
+            pos: [t["position.x"] - parentPivot.x, t["position.y"] - parentPivot.y],
             rot: t["rotation.z"],
             scale: [t["scale.x"], t["scale.y"]]
-        };
-    }
-    return shape;
-};
-
-// Visible shapes in the given layers, walking into groups.
-bridge.collectShapes = function (ids, local) {
-    var shapes = [];
-    var visit = function (id) {
-        if (api.get(id, "hidden")) return;
-        if (api.getLayerType(id) !== "group" && api.isShape(id)) shapes.push(bridge.shapeData(id, local));
-        var children = api.getChildren(id);
-        for (var i = 0; i < children.length; i++) visit(children[i]);
+        },
+        children: []
     };
-    var selection = api.getSelection();
-    for (var i = 0; i < ids.length; i++) visit(ids[i]);
-    api.select(selection);
-    return shapes;
+    if (shallow) return node;
+    if (node.kind === "shape") {
+        if (!api.isShape(id)) return null;   // behaviours, utilities...
+        node.contours = bridge.contours(id, true);
+        var col = bridge.color(id);
+        if (col) node.color = col;
+    }
+    var pivot = api.get(id, "pivot") || { x: 0, y: 0 };
+    var children = api.getChildren(id);
+    for (var i = 0; i < children.length; i++) {
+        var child = bridge.node(children[i], pivot);
+        if (child) node.children.push(child);
+    }
+    return node;
 };
 
-// ----------------------------------------------- PSR animation -> C4D keys
+// The selected layers as a hierarchy. A layer selected inside a group keeps
+// its parent groups as folders, so it lands in C4D exactly where it is.
+bridge.tree = function (ids) {
+    var selected = {};
+    for (var i = 0; i < ids.length; i++) selected[ids[i]] = true;
+    var forest = [];
+    for (var k = 0; k < ids.length; k++) {
+        var id = ids[k];
+        var chain = [], skip = false;
+        for (var p = api.getParent(id); !bridge.isRootParent(p); p = api.getParent(p)) {
+            if (selected[p]) { skip = true; break; }   // already sent with its parent
+            chain.unshift(p);
+        }
+        if (skip) continue;
+        var parentPivot = chain.length ? api.get(chain[chain.length - 1], "pivot") : { x: 0, y: 0 };
+        var node = bridge.node(id, parentPivot);
+        if (!node) continue;
+        // Wrap in the parent groups, sharing them between selected siblings.
+        var level = forest, pv = { x: 0, y: 0 };
+        for (var c = 0; c < chain.length; c++) {
+            var found = null;
+            for (var f = 0; f < level.length; f++) if (level[f].id === chain[c]) found = level[f];
+            if (!found) {
+                found = bridge.node(chain[c], pv, true);
+                if (!found) { level = null; break; }   // a hidden parent hides it
+                level.push(found);
+            }
+            pv = api.get(chain[c], "pivot") || { x: 0, y: 0 };
+            level = found.children;
+        }
+        if (level) level.push(node);
+    }
+    return forest;
+};
 
-var PSR_ATTRS = ["position.x", "position.y", "rotation.z", "scale.x", "scale.y"];
-
-bridge.transformValues = function (id) {
-    var p = api.get(id, "position"), r = api.get(id, "rotation"), s = api.get(id, "scale");
-    return { "position.x": p.x, "position.y": p.y, "rotation.z": r.z, "scale.x": s.x, "scale.y": s.y };
+bridge.eachNode = function (nodes, fn) {
+    for (var i = 0; i < nodes.length; i++) {
+        fn(nodes[i]);
+        bridge.eachNode(nodes[i].children || [], fn);
+    }
 };
 
 // Keyframes of one attribute as [[frame, value], ...] (empty if none).
@@ -256,17 +376,17 @@ bridge.keysOf = function (id, attr) {
     return keys;
 };
 
-// Adds `anim` to each shape: the PSR keyframes, plus the value on every
-// frame between the first and last key, so C4D can fit its tangents to the
-// real curve whatever easing Cavalry used.
-bridge.addAnimation = function (shapes) {
+// Adds `anim` to every node with PSR keyframes: the keys, plus the value on
+// every frame between the first and last key, so C4D can fit its curves to
+// the real motion whatever easing Cavalry used. Returns the animated count.
+bridge.addAnimation = function (nodes) {
     var comp = api.getActiveComp();
     var fps = api.get(comp, "fps");
     var first = Infinity, last = -Infinity, animated = [];
-    for (var i = 0; i < shapes.length; i++) {
+    bridge.eachNode(nodes, function (node) {
         var attrs = {}, any = false;
         for (var a = 0; a < PSR_ATTRS.length; a++) {
-            var keys = bridge.keysOf(shapes[i].id, PSR_ATTRS[a]);
+            var keys = bridge.keysOf(node.id, PSR_ATTRS[a]);
             if (keys.length < 1) continue;
             attrs[PSR_ATTRS[a]] = { keys: keys, first: keys[0][0], samples: [] };
             first = Math.min(first, keys[0][0]);
@@ -274,10 +394,10 @@ bridge.addAnimation = function (shapes) {
             any = true;
         }
         if (any) {
-            shapes[i].anim = { fps: fps, attrs: attrs };
-            animated.push(shapes[i]);
+            node.anim = { fps: fps, attrs: attrs };
+            animated.push(node);
         }
-    }
+    });
     if (!animated.length) return 0;
 
     // setFrame clamps to the comp's range, so widen it while sampling.
@@ -300,40 +420,90 @@ bridge.addAnimation = function (shapes) {
         api.set(comp, { startFrame: start, endFrame: end });
         api.setFrame(now);
     }
+    // Positions are sent relative to the parent's pivot, keys included.
+    for (var n = 0; n < animated.length; n++) {
+        var node = animated[n], at = node.anim.attrs;
+        for (var axis = 0; axis < 2; axis++) {
+            var a2 = at[axis ? "position.y" : "position.x"];
+            if (!a2) continue;
+            var off = node.parentPivot[axis];
+            a2.keys = a2.keys.map(function (kv) { return [kv[0], kv[1] - off]; });
+            a2.samples = a2.samples.map(function (v) { return round3(v - off); });
+        }
+    }
     return animated.length;
 };
 
-// Sends shapes to the C4D bridge; returns a status message. With
-// `animation`, every layer becomes its own Cavalry Spline carrying the
-// layer's position / rotation / scale and their keyframes.
-bridge.sendShapes = function (port, ids, animation) {
-    var shapes = bridge.collectShapes(ids, animation);
-    if (!shapes.length) return "Nothing to send - select visible shapes or groups";
-    var animated = animation ? bridge.addAnimation(shapes) : 0;
-    var client = new api.WebClient("http://127.0.0.1:" + port);
-    client.post("/shapes", JSON.stringify({ shapes: shapes }), "application/json");
-    if (client.status() !== 200) return "C4D not reachable on port " + port;
-    var n = shapes.length + " shape" + (shapes.length === 1 ? "" : "s");
-    if (!animation) return "Sent " + n + " - added as a new Cavalry Spline in C4D";
-    return "Sent " + n + " (" + animated + " animated) - one Cavalry Spline per layer in C4D";
+// Visible shapes in the given layers (walking into groups), world space.
+bridge.flatShapes = function (ids) {
+    var shapes = [];
+    var visit = function (id) {
+        if (api.get(id, "hidden")) return;
+        if (!bridge.isFolder(id) && api.isShape(id)) {
+            var s = { id: id, name: api.getNiceName(id), contours: bridge.contours(id, false) };
+            var col = bridge.color(id);
+            if (col) s.color = col;
+            shapes.push(s);
+        }
+        var children = api.getChildren(id);
+        for (var i = 0; i < children.length; i++) visit(children[i]);
+    };
+    for (var i = 0; i < ids.length; i++) visit(ids[i]);
+    return shapes;
+};
+
+// Sends the selected layers to Cinema 4D; returns a status message.
+//   asGroup    folders -> Nulls, one Cavalry Spline per shape, transforms kept
+//   !asGroup   one Cavalry Spline with every outline (world space)
+bridge.send = function (ids, asGroup, animation) {
+    var c4d = bridge.presence();
+    if (!c4d) return "Cinema 4D isn't running (or the Cavalry Bridge plugin isn't installed)";
+    var selection = api.getSelection();
+    var payload, summary;
+    try {
+        if (asGroup) {
+            // (A single shape sent as a group is just one Cavalry Spline,
+            // with its transform and keys.)
+            var tree = bridge.tree(ids);
+            var shapes = 0, folders = 0;
+            bridge.eachNode(tree, function (n) { if (n.kind === "folder") folders++; else shapes++; });
+            if (!shapes) return "Nothing to send - select visible shapes or groups";
+            var animated = animation ? bridge.addAnimation(tree) : 0;
+            payload = { tree: tree };
+            summary = "Sent " + shapes + " shape" + (shapes === 1 ? "" : "s") +
+                (folders ? " in " + folders + " folder" + (folders === 1 ? "" : "s") : "") +
+                (animation ? " (" + animated + " animated)" : "");
+        } else {
+            var flat = bridge.flatShapes(ids);
+            if (!flat.length) return "Nothing to send - select visible shapes or groups";
+            payload = { shapes: flat };
+            summary = "Sent " + flat.length + " shape" + (flat.length === 1 ? "" : "s") + " as one Cavalry Spline" +
+                (animation ? " (keyframes need Send as: Group)" : "");
+        }
+    } finally {
+        api.select(selection);
+    }
+    var client = new api.WebClient("http://127.0.0.1:" + c4d.port);
+    client.post("/shapes", JSON.stringify(payload), "application/json");
+    if (client.status() !== 200) return "Cinema 4D didn't answer on port " + c4d.port;
+    return summary;
 };
 
 // ------------------------------------------------------------------ UI
 // (Skipped when this file is evaluated outside a Script Window.)
 
 if (typeof ui.Button === "function") {
-    var POLL_MS = 33;      // ~30 updates per second
+    var POLL_MS = 33;        // ~30 updates per second while connected
+    var WATCH_MS = 1000;     // look for Cinema 4D once a second while not
     var client = null;
     var lastBody = null;
-    var port = 1234;
-
-    var portField = new ui.NumericField(1234);
-    portField.setType(0);
-    portField.setMin(1024);
-    portField.setMax(65535);
+    var port = null;
+    var stamp = null;        // which Cinema 4D run we're talking to
+    var failedStamp = null;  // a run that didn't answer: don't retry it
+    var autoConnect = true;  // off after Disconnect, until Connect
 
     var connectButton = new ui.Button("Connect");
-    var statusLabel = new ui.Label("Disconnected");
+    var statusLabel = new ui.Label("Looking for Cinema 4D...");
 
     var modeDrop = new ui.DropDown();
     modeDrop.addEntry("Screen (camera view)");
@@ -355,26 +525,31 @@ if (typeof ui.Button === "function") {
     bindButton.setToolTip("Drive the selected Cavalry layer with the chosen C4D object");
     var objectGuids = [];
 
-    var sendButton = new ui.Button("Send Selected to C4D");
-    sendButton.setToolTip("Send the selected shapes (or everything in selected groups) to the " +
-        "'Cavalry Shapes' generator in C4D as Bezier splines");
-    var sendLabel = new ui.Label("");
+    var sendAsDrop = new ui.DropDown();
+    sendAsDrop.addEntry("Group (keep folders)");
+    sendAsDrop.addEntry("Single object");
+    sendAsDrop.setToolTip("Group: folders become Nulls and every shape its own Cavalry Spline, with its " +
+        "position / rotation / scale. Single object: all outlines in one Cavalry Spline.");
     var animationCheck = new ui.Checkbox(false);
-    animationCheck.setToolTip("Send each layer's position / rotation / scale and their keyframes; " +
-        "every layer becomes its own Cavalry Spline in C4D");
+    animationCheck.setToolTip("Also send position / rotation / scale keyframes (with Send as: Group)");
+    var sendButton = new ui.Button("Send Selected to C4D");
+    sendButton.setToolTip("Send the selected layers (or everything in selected groups) to Cinema 4D");
+    var sendLabel = new ui.Label("");
 
     sendButton.onClick = function () {
         var sel = api.getSelection();
         if (!sel.length) {
-            sendLabel.setText("Select shapes or groups first");
+            sendLabel.setText("Select layers or groups first");
             return;
         }
-        sendLabel.setText(bridge.sendShapes(Math.round(portField.getValue()), sel, animationCheck.getValue()));
+        // Read the choice by its text: it doesn't depend on how the dropdown numbers entries.
+        var asGroup = String(sendAsDrop.getText()).indexOf("Single") < 0;
+        sendLabel.setText(bridge.send(sel, asGroup, !!animationCheck.getValue()));
     };
 
     function refreshOptions() {
         var o = bridge.options;
-        o.mode = modeDrop.getValue();
+        o.mode = String(modeDrop.getText()).indexOf("World") < 0 ? 0 : 1;
         o.worldScale = worldScaleField.getValue();
         o.rotation = rotationCheck.getValue();
         o.perspectiveScale = perspectiveCheck.getValue();
@@ -411,18 +586,35 @@ if (typeof ui.Button === "function") {
     };
 
     function disconnect(message) {
-        timer.stop();
+        pollTimer.stop();
         client = null;
         connectButton.setText("Connect");
         statusLabel.setText(message);
     }
 
+    function connect(presence) {
+        refreshOptions();
+        bridge.rescan();
+        port = presence.port;
+        stamp = presence.pid + "/" + presence.started;
+        client = new api.WebClient("http://127.0.0.1:" + port);
+        connectButton.setText("Disconnect");
+        statusLabel.setText("Connecting to Cinema 4D on port " + port + "...");
+        poll();
+        if (client) pollTimer.start();
+    }
+
     function poll() {
+        // Cinema 4D removes the presence file when it quits: notice that
+        // without a (blocking) refused connection.
+        if (!api.filePathExists(PRESENCE_FILE)) {
+            disconnect("Cinema 4D closed - waiting for it to start");
+            return;
+        }
         client.get("/state");
         if (client.status() !== 200) {
-            // A refused connection can block for a moment on Windows, so stop
-            // polling rather than retrying in a loop.
-            disconnect("C4D not reachable on port " + port + " - click Connect to retry");
+            failedStamp = stamp;
+            disconnect("Cinema 4D isn't answering on port " + port + " - click Connect to retry");
             return;
         }
         var body = client.body();
@@ -435,36 +627,53 @@ if (typeof ui.Button === "function") {
             return;
         }
         refreshObjectList();
-        statusLabel.setText("Connected to C4D on " + port + " - " + bridge.packets +
+        statusLabel.setText("Connected to Cinema 4D on port " + port + " - " + bridge.packets +
             " updates, C4D frame " + bridge.lastFrame);
     }
 
-    function TimerCallbacks() {
+    // Connects by itself whenever Cinema 4D is running, and again after it restarts.
+    function watch() {
+        if (client || !autoConnect) return;
+        var p = bridge.presence();
+        if (!p) {
+            statusLabel.setText("Waiting for Cinema 4D (with the Cavalry Bridge plugin)...");
+            return;
+        }
+        if (p.pid + "/" + p.started === failedStamp) return;
+        connect(p);
+    }
+
+    function PollCallbacks() {
         this.onTimeout = function () {
             if (client) poll();
         };
     }
-    var timer = new api.Timer(new TimerCallbacks());
-    timer.setInterval(POLL_MS);
-    timer.setRepeating(true);
+    function WatchCallbacks() {
+        this.onTimeout = watch;
+    }
+    var pollTimer = new api.Timer(new PollCallbacks());
+    pollTimer.setInterval(POLL_MS);
+    pollTimer.setRepeating(true);
+    var watchTimer = new api.Timer(new WatchCallbacks());
+    watchTimer.setInterval(WATCH_MS);
+    watchTimer.setRepeating(true);
 
+    // Connected: Disconnect (and stop reconnecting). Otherwise: try now,
+    // including a Cinema 4D that didn't answer before.
     connectButton.onClick = function () {
         if (client) {
-            disconnect("Disconnected");
+            autoConnect = false;
+            disconnect("Disconnected - click Connect to reconnect");
             return;
         }
-        refreshOptions();
-        bridge.rescan();
-        port = Math.round(portField.getValue());
-        client = new api.WebClient("http://127.0.0.1:" + port);
-        connectButton.setText("Disconnect");
-        statusLabel.setText("Connecting to C4D on " + port + "...");
-        poll();
-        if (client) timer.start();
+        autoConnect = true;
+        failedStamp = null;
+        watch();
     };
 
     ui.onClose = function () {
-        timer.stop();
+        pollTimer.stop();
+        watchTimer.stop();
     };
 
     function row(labelText, widget) {
@@ -477,15 +686,16 @@ if (typeof ui.Button === "function") {
     }
 
     var connectRow = new ui.HLayout();
-    connectRow.add(new ui.Label("C4D port"), portField, connectButton);
+    connectRow.add(statusLabel);
     connectRow.addStretch();
+    connectRow.add(connectButton);
 
     var bindRow = new ui.HLayout();
     bindRow.add(objectDrop, bindButton);
 
     ui.setTitle("C4D Bridge");
     ui.add(connectRow);
-    ui.add(statusLabel);
+    ui.add(new ui.Label("Cinema 4D to Cavalry"));
     ui.add(row("Mode", modeDrop));
     ui.add(row("World scale", worldScaleField));
     ui.add(row("Rotation", rotationCheck));
@@ -493,10 +703,15 @@ if (typeof ui.Button === "function") {
     ui.add(row("Create layers", createCheck));
     ui.add(row("Record keys", recordCheck));
     ui.add(bindRow);
-    ui.add(new ui.Label("Cavalry to C4D"));
+    ui.add(new ui.Label("Cavalry to Cinema 4D"));
+    ui.add(row("Send as", sendAsDrop));
     ui.add(row("Animation (PSR)", animationCheck));
     ui.add(sendButton);
     ui.add(sendLabel);
     ui.addStretch();
     ui.show();
+
+    refreshOptions();
+    watchTimer.start();
+    watch();   // connect straight away when Cinema 4D is already running
 }
