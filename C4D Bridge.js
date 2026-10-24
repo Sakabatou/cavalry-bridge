@@ -247,6 +247,53 @@ bridge.pathValue = function (path, fillType) {
     };
 };
 
+// Path keys must share their layout: Cavalry pairs points across keys, and
+// logs "Error re-syncing Point UIDs" for every key whose point or contour
+// count differs. So every frame gets as many contours, and each contour as
+// many points, as its largest frame. Extra points are copies of existing ones
+// (the shape doesn't change); a contour missing on a frame is a single
+// point, which draws nothing.
+bridge.matchPaths = function (paths) {
+    var counts = [], closed = [], spot = [];
+    paths.forEach(function (path) {
+        path.forEach(function (c, i) {
+            counts[i] = Math.max(counts[i] || 0, c.points.length);
+            if (closed[i] === undefined) { closed[i] = c.isClosed; spot[i] = c.points[0].position; }
+        });
+    });
+    return paths.map(function (path) {
+        return counts.map(function (n, i) {
+            var c = path[i];
+            if (!c) {
+                var p = spot[i], pts = [];
+                for (var j = 0; j < n; j++) pts.push({ position: p, inHandle: p, outHandle: p });
+                return { isClosed: closed[i], points: pts };
+            }
+            return { isClosed: c.isClosed, points: bridge.padPoints(c.points, n) };
+        });
+    });
+};
+
+// `points` grown to `n` by repeating points: each repeated point keeps its
+// in-handle on the first copy and its out-handle on the last.
+bridge.padPoints = function (points, n) {
+    var m = points.length, extra = n - m;
+    if (extra <= 0) return points;
+    var out = [];
+    for (var i = 0; i < m; i++) {
+        var p = points[i];
+        var copies = 1 + Math.floor(extra * (i + 1) / m) - Math.floor(extra * i / m);
+        for (var k = 0; k < copies; k++) {
+            out.push({
+                position: p.position,
+                inHandle: k === 0 ? p.inHandle : p.position,
+                outHandle: k === copies - 1 ? p.outHandle : p.position
+            });
+        }
+    }
+    return out;
+};
+
 // A send from C4D with Animation: one layer per object, keyed on every frame
 // (outlines as path keys, other objects as position / rotation / scale keys).
 // Returns the number of keyed layers.
@@ -277,11 +324,20 @@ bridge.applyBake = function (bake) {
             // Keys hold the path in the layer's own space: keep that space plain.
             api.set(id, { position: [0, 0], rotation: 0, scale: [1, 1] });
             var fillType = (api.get(id, "inputPath") || {}).fillType;
+            var keys = [];
             for (var k = 0; k < track.length; k++) {
                 var o = track[k][1];
                 if (!o.spline || (bridge.options.mode === 0 && o.depth <= 0)) continue;
-                api.keyframe(id, track[k][0], { inputPath: bridge.pathValue(bridge.splinePath(o.spline, res), fillType) });
+                var path = bridge.splinePath(o.spline, res);
+                if (path.length) keys.push([track[k][0], path]);
             }
+            var paths = bridge.matchPaths(keys.map(function (kp) { return kp[1]; }));
+            for (var m = 0; m < keys.length; m++) {
+                api.keyframe(id, keys[m][0], { inputPath: bridge.pathValue(paths[m], fillType) });
+            }
+            // Path keys written by script need their point ids rebuilt, or
+            // Cavalry logs "Error re-syncing Point UIDs" while it animates.
+            api.resyncPathKeyframes(id, "inputPath");
         } else {
             for (var t = 0; t < track.length; t++) {
                 var values = bridge.transformFor(track[t][1], res);

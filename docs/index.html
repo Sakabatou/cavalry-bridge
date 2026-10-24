@@ -525,6 +525,10 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <h3>1.2.1: animation the other way</h3>
         <p>The first idea was a snapshot layer per frame: 250 layers per object. Cavalry can key a shape's path instead (its <code>inputPath</code>), even with a different point count on each key. So Cinema&nbsp;4D steps through the preview range, records each object's outline on every frame, and Cavalry keys one layer per object. A turning cube and a moving circle matched the C4D view frame for frame.</p>
       </li>
+      <li class="problem">
+        <h3>1.2.2: a flood of "Point UIDs" errors</h3>
+        <p>Cavalry's console filled with "Error re-syncing Point UIDs on Animating Path". Cavalry pairs points from one path key to the next, and a turning cube's outline has a different number of points (sometimes of contours) on each frame. Now every frame is padded to the same layout: extra points are copies of existing ones, and a contour missing on a frame shrinks to a single point, so the shape on each frame stays exactly the same.</p>
+      </li>
     </ol>
   </div>
 </section>
@@ -593,7 +597,7 @@ docs/                            this page</code></pre>
 
 <footer>
   <div class="wrap">
-    <span>Cavalry Bridge 1.2.1 · <a data-repo href="">Source on GitHub</a></span>
+    <span>Cavalry Bridge 1.2.2 · <a data-repo href="">Source on GitHub</a></span>
     <span>Cinema 4D is a trademark of Maxon. Cavalry is made by Scene Group / Canva. This project isn't affiliated with either.</span>
   </div>
 </footer>
