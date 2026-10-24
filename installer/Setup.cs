@@ -32,8 +32,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Cavalry Bridge Setup")]
 [assembly: AssemblyProduct("Cavalry Bridge")]
 [assembly: AssemblyDescription("Installs the Cavalry Bridge into Cinema 4D and Cavalry")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.2.1.0")]
+[assembly: AssemblyFileVersion("1.2.1.0")]
 
 namespace CavalryBridgeSetup
 {
@@ -56,7 +56,7 @@ namespace CavalryBridgeSetup
 
     static class Setup
     {
-        public const string Version = "1.2.0";
+        public const string Version = "1.2.1";
         public const string PluginName = "cavalry_bridge";
         public const string CavalryScriptName = "C4D Bridge.js";
 

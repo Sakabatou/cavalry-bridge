@@ -19,7 +19,7 @@ Send Cavalry shapes, with their animation, to Cinema&nbsp;4D as real splines. St
 | **Cavalry → Cinema 4D** | *Send Selected to C4D* creates **Cavalry Splines**, real spline objects that work directly in Extrude, Sweep, Loft and Lathe. Holes in letters stay holes, the shapes are saved with the scene, and the Scale tool resizes them like any primitive. |
 | **…as a group or one object** | *Send as: Group* rebuilds your **folders as Nulls**, each shape its own Cavalry Spline with its position, rotation, scale and pivot. *Send as: Single object* merges everything into one spline. |
 | **…with animation** | With *Animation (PSR)* ticked, layers and folders bring their position, rotation and scale **keyframes**. Eases are rebuilt as curve handles on the original keys. |
-| **Cinema 4D → Cavalry** | Splines, **3D objects** and **whole folders** sent from the Cavalry Bridge panel appear in Cavalry as **editable shapes inside matching groups**, following every change (renames, moves, hiding) live, seen through the C4D camera or in world XY. 3D objects arrive as their outline, holes included. |
+| **Cinema 4D → Cavalry** | Splines, **3D objects** and **whole folders** sent from the Cavalry Bridge panel appear in Cavalry as **editable shapes inside matching groups**, following every change (renames, moves, hiding) live, seen through the C4D camera or in world XY. 3D objects arrive as their outline, holes included. Tick **Animation** to key every frame of the preview range instead, one layer per object. |
 
 The Cavalry window **connects by itself** whenever Cinema 4D is running, and only does work when something changes. Everything stays on your own computer: a state file in your temp folder, and `127.0.0.1:1234` for sending shapes to C4D.
 
@@ -41,7 +41,7 @@ If Windows shows "Windows protected your PC" (the setup isn't code-signed yet), 
 
 **Cavalry → Cinema 4D:** select layers or groups in Cavalry, choose *Send as* (Group or Single object), optionally tick *Animation (PSR)*, then click **Send Selected to C4D**.
 
-**Cinema 4D → Cavalry:** open **Extensions › Cavalry Bridge**, select splines, 3D objects or folders (Nulls) and click **Send Selected to Cavalry**. Sending again replaces what's sent; Send with nothing selected stops. The panel shows the connection, what's being sent and what Cavalry sent last; the C4D Bridge window in Cavalry connects by itself.
+**Cinema 4D → Cavalry:** open **Extensions › Cavalry Bridge**, select splines, 3D objects or folders (Nulls) and click **Send Selected to Cavalry**. Sending again replaces what's sent; Send with nothing selected stops. Tick *Animation* first to key every frame in Cavalry. The panel shows the connection, what's being sent and what Cavalry sent last; the C4D Bridge window in Cavalry connects by itself.
 
 The [project page](https://sakabatou.github.io/cavalry-bridge/) explains every setting, how the bridge works, and how it was built.
 

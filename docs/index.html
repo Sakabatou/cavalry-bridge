@@ -245,6 +245,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
           <li>Null folders become Cavalry groups, nested and kept in sync</li>
           <li>Renames, moves and hiding follow live</li>
           <li>Seen through the C4D camera, or flat world XY</li>
+          <li>Tick Animation to key every frame: one layer per object, ready to render</li>
           <li>Connects by itself whenever Cinema 4D is running</li>
         </ul>
       </div>
@@ -326,6 +327,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
           <li><strong>Open Extensions › Cavalry Bridge</strong><span>The panel shows whether Cavalry is connected. Dock it anywhere, like any manager.</span></li>
           <li><strong>Select objects and click Send Selected to Cavalry</strong><span>Splines (Text, Circle, Star…), 3D objects, or a Null with everything inside it.</span></li>
           <li><strong>Watch them appear in Cavalry</strong><span>Folders become groups; shapes follow your changes live. Send again to send something else; click Send with nothing selected to stop.</span></li>
+          <li><strong>Optional: tick Animation before sending</strong><span>Every frame of the preview range is keyed in Cavalry, one layer per object. Send again after changing the animation.</span></li>
         </ol>
       </div>
     </div>
@@ -340,7 +342,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <tr><td>Record keys</td><td>Keyframe incoming position, rotation and scale at the C4D frame, instead of only moving the layer.</td></tr>
         <tr><td>Bind Selected</td><td>Drive your own Cavalry layer with a C4D object, instead of the layer the bridge creates.</td></tr>
         <tr><td>Send as</td><td><b>Group (keep folders)</b>: folders become Nulls, every shape its own Cavalry Spline, each with its position, rotation, scale and pivot. <b>Single object</b>: all outlines in one Cavalry Spline.</td></tr>
-        <tr><td>Animation (PSR)</td><td>With Send as Group: also send each layer's and folder's position, rotation and scale keyframes.</td></tr>
+        <tr><td>Animation (PSR)</td><td>With Send as Group: also send each layer's and folder's position, rotation and scale keyframes. On by default, and remembered.</td></tr>
         <tr><td>Send Selected to C4D</td><td>Send the selected layers to Cinema 4D.</td></tr>
       </table>
     </div>
@@ -350,6 +352,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
       <table>
         <tr><th>Control</th><th>What it does</th></tr>
         <tr><td>Connection · Port</td><td>Whether Cavalry is connected, and the port the bridge uses (1234; change it if another program needs that port).</td></tr>
+        <tr><td>Animation</td><td>Send keys every frame of the preview range in Cavalry instead of following live: each outline becomes a path key, other objects get position, rotation and scale keys. Cameras, deformers and generators are all taken into account, since it records what the view shows.</td></tr>
         <tr><td>Send Selected to Cavalry</td><td>Sends the selected splines, 3D objects or folders live to Cavalry, replacing what was sent before. Folders bring everything inside. With nothing selected it stops; Cavalry hides those layers, never deletes them. The line below says what's being sent.</td></tr>
         <tr><td>Last received · Add Cavalry Spline</td><td>What Cavalry sent last, and a Cavalry Spline that always shows the latest send.</td></tr>
       </table>
@@ -514,6 +517,14 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <h3>1.2: shapes missing in the Front view</h3>
         <p>Some objects reached Cavalry's layer list but never drew. Flat views (Front, Top…) place their camera anywhere, so objects could sit "behind" it, and the bridge skipped them. Only a perspective camera has a behind now.</p>
       </li>
+      <li class="problem">
+        <h3>1.2.1: "we lost the animation"</h3>
+        <p>Keys from Cavalry stopped arriving. Sending the same group by hand showed both ends still worked: the Animation (PSR) box simply started unticked each time the window opened. It now starts ticked and remembers your choice.</p>
+      </li>
+      <li>
+        <h3>1.2.1: animation the other way</h3>
+        <p>The first idea was a snapshot layer per frame: 250 layers per object. Cavalry can key a shape's path instead (its <code>inputPath</code>), even with a different point count on each key. So Cinema&nbsp;4D steps through the preview range, records each object's outline on every frame, and Cavalry keys one layer per object. A turning cube and a moving circle matched the C4D view frame for frame.</p>
+      </li>
     </ol>
   </div>
 </section>
@@ -546,7 +557,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
             <li>Keyframed position, rotation and scale only: behaviour-driven motion (Noise, Oscillator) isn't included.</li>
             <li>Single object merges outlines in world space, without animation; use Group for keyframes.</li>
             <li>Animated outlines (text animators, trims) arrive as they look at the playhead frame.</li>
-            <li>C4D → Cavalry: splines aren't keyframed in Cavalry. Cubic, Akima and B-spline curves are sent as many straight segments.</li>
+            <li>C4D → Cavalry: animation arrives as a key on every frame (tick Animation), not as the original keys. Cubic, Akima and B-spline curves are sent as many straight segments.</li>
             <li>3D objects arrive as one flat outline (their silhouette), without inner edges or shading. Above 120,000 triangles they arrive as their convex outline.</li>
             <li>Windows only for now. The scripts themselves aren't Windows-specific.</li>
           </ul></details>
@@ -582,7 +593,7 @@ docs/                            this page</code></pre>
 
 <footer>
   <div class="wrap">
-    <span>Cavalry Bridge 1.2.0 · <a data-repo href="">Source on GitHub</a></span>
+    <span>Cavalry Bridge 1.2.1 · <a data-repo href="">Source on GitHub</a></span>
     <span>Cinema 4D is a trademark of Maxon. Cavalry is made by Scene Group / Canva. This project isn't affiliated with either.</span>
   </div>
 </footer>

@@ -30,6 +30,9 @@ var GROUP_KEY = "c4dBridgeGroup";    // user data: the "C4D Bridge" group
 var PRESENCE_FILE = api.getTempFolder() + "/cavalry_bridge_c4d.json";        // C4D is running (port)
 var STATE_FILE = api.getTempFolder() + "/cavalry_bridge_state.json";         // what C4D sends, rewritten only on change
 var HEARTBEAT_FILE = api.getTempFolder() + "/cavalry_bridge_cavalry.json";   // this window is listening
+var BAKE_FILE = api.getTempFolder() + "/cavalry_bridge_bake.json";           // every frame of a send with Animation
+var BAKED_KEY = "c4dBridgeBaked";    // user data: layer holds keys from a C4D bake
+var LAST_BAKE_PREF = "c4dBridgeLastBake";   // id of the bake already turned into keys
 
 // Layers that are folders even without children.
 var FOLDER_TYPES = { group: 1, "null": 1, layoutGroup: 1, gridLayoutGroup: 1, schedulingGroup: 1 };
@@ -174,10 +177,25 @@ bridge.applySpline = function (id, obj, res) {
 };
 
 bridge.applyTransform = function (id, obj, res, frame) {
+    var values = bridge.transformFor(obj, res);
+    if (!values) return;
+    if (bridge.options.record) {
+        api.keyframe(id, frame, values);
+    } else {
+        var set = { position: [values["position.x"], values["position.y"]],
+                    scale: [values["scale.x"], values["scale.y"]] };
+        if ("rotation.z" in values) set.rotation = values["rotation.z"];
+        api.set(id, set);
+    }
+};
+
+// A non-spline object's layer transform, as keyable values (null when
+// it's behind the camera).
+bridge.transformFor = function (obj, res) {
     var o = bridge.options;
     var x, y, rot, sx, sy;
     if (o.mode === 0) {
-        if (obj.depth <= 0) return;   // behind the camera
+        if (obj.depth <= 0) return null;   // behind the camera
         x = (obj.screen[0] - 0.5) * res.x;
         y = (0.5 - obj.screen[1]) * res.y;
         rot = obj.screenRot;
@@ -193,13 +211,87 @@ bridge.applyTransform = function (id, obj, res, frame) {
     }
     var values = { "position.x": x, "position.y": y, "scale.x": sx, "scale.y": sy };
     if (o.rotation) values["rotation.z"] = rot;
-    if (o.record) {
-        api.keyframe(id, frame, values);
-    } else {
-        var set = { position: [x, y], scale: [sx, sy] };
-        if (o.rotation) set.rotation = rot;
-        api.set(id, set);
+    return values;
+};
+
+// ------------------------------------------------- C4D animation -> keys
+
+var BAKED_ATTRS = ["inputPath", "position.x", "position.y", "rotation.z", "scale.x", "scale.y"];
+
+bridge.isBaked = function (id) {
+    return api.hasUserDataKey(id, BAKED_KEY) && api.getUserDataKey(id, BAKED_KEY);
+};
+
+// Removes the keys an earlier bake left, so the layer can follow C4D live again.
+bridge.unbake = function (id) {
+    for (var i = 0; i < BAKED_ATTRS.length; i++) {
+        try { api.deleteAnimation(id, BAKED_ATTRS[i]); } catch (e) { /* not animated */ }
     }
+    api.setUserData(id, BAKED_KEY, false);
+    delete bridge.pathCache[id];
+};
+
+// setEditablePath's format -> the inputPath attribute's (what a path key holds).
+bridge.pathValue = function (path, fillType) {
+    return {
+        contours: path.map(function (c) {
+            return {
+                closed: c.isClosed,
+                points: c.points.map(function (p) {
+                    return { gradientLocked: false, weightLocked: false, points: [p.inHandle, p.outHandle, p.position] };
+                })
+            };
+        }),
+        fillType: fillType || 0,
+        version: 1
+    };
+};
+
+// A send from C4D with Animation: one layer per object, keyed on every frame
+// (outlines as path keys, other objects as position / rotation / scale keys).
+// Returns the number of keyed layers.
+bridge.applyBake = function (bake) {
+    var res = api.get(api.getActiveComp(), "resolution");
+    var fps = api.get(api.getActiveComp(), "fps");
+    var frames = bake.frames || [];
+    if (!frames.length) return 0;
+    // Layers, names and groups as for a live update (geometry is skipped).
+    bridge.apply({ objects: frames[0].objects, frame: frames[0].frame, animated: true });
+    var tracks = {};   // C4D GUID -> [[Cavalry frame, object], ...]
+    for (var i = 0; i < frames.length; i++) {
+        var at = Math.round(frames[i].frame / bake.fps * fps);   // same time in seconds
+        for (var j = 0; j < frames[i].objects.length; j++) {
+            var obj = frames[i].objects[j];
+            if (obj.kind === "folder") continue;
+            (tracks[obj.id] = tracks[obj.id] || []).push([at, obj]);
+        }
+    }
+    var keyed = 0;
+    for (var guid in tracks) {
+        var id = bridge.layerFor[guid];
+        if (!id || !api.layerExists(id)) continue;
+        bridge.unbake(id);
+        var track = tracks[guid];
+        if (track[0][1].spline) {
+            if (api.getLayerType(id) !== "editableShape") continue;
+            // Keys hold the path in the layer's own space: keep that space plain.
+            api.set(id, { position: [0, 0], rotation: 0, scale: [1, 1] });
+            var fillType = (api.get(id, "inputPath") || {}).fillType;
+            for (var k = 0; k < track.length; k++) {
+                var o = track[k][1];
+                if (!o.spline || (bridge.options.mode === 0 && o.depth <= 0)) continue;
+                api.keyframe(id, track[k][0], { inputPath: bridge.pathValue(bridge.splinePath(o.spline, res), fillType) });
+            }
+        } else {
+            for (var t = 0; t < track.length; t++) {
+                var values = bridge.transformFor(track[t][1], res);
+                if (values) api.keyframe(id, track[t][0], values);
+            }
+        }
+        api.setUserData(id, BAKED_KEY, true);
+        keyed++;
+    }
+    return keyed;
 };
 
 bridge.isRootParent = function (parent) {
@@ -224,6 +316,10 @@ bridge.apply = function (packet) {
             delete bridge.hiddenByBridge[obj.id];
         }
         if (obj.kind === "folder") continue;
+        // Sent with Animation: the layer's keys carry the motion; following
+        // live would overwrite them. Sent without: drop any old keys first.
+        if (packet.animated) continue;
+        if (bridge.isBaked(id)) bridge.unbake(id);
         if (obj.spline) bridge.applySpline(id, obj, res);
         else bridge.applyTransform(id, obj, res, packet.frame);
     }
@@ -554,7 +650,11 @@ if (typeof ui.Button === "function") {
     sendAsDrop.addEntry("Single object");
     sendAsDrop.setToolTip("Group: folders become Nulls and every shape its own Cavalry Spline, with its " +
         "position / rotation / scale. Single object: all outlines in one Cavalry Spline.");
-    var animationCheck = new ui.Checkbox(false);
+    // On by default, and remembered between sessions, so keys aren't lost
+    // just because the window was reopened.
+    var SEND_PREFS = "c4dBridgeSendOptions";
+    var sendPrefs = api.hasPreferenceObject(SEND_PREFS) ? api.getPreferenceObject(SEND_PREFS) : {};
+    var animationCheck = new ui.Checkbox(sendPrefs.animation !== false);
     animationCheck.setToolTip("Also send position / rotation / scale keyframes (with Send as: Group)");
     var sendButton = new ui.Button("Send Selected to C4D");
     sendButton.setToolTip("Send the selected layers (or everything in selected groups) to Cinema 4D");
@@ -568,7 +668,9 @@ if (typeof ui.Button === "function") {
         }
         // Read the choice by its text: it doesn't depend on how the dropdown numbers entries.
         var asGroup = String(sendAsDrop.getText()).indexOf("Single") < 0;
-        sendLabel.setText(bridge.send(sel, asGroup, !!animationCheck.getValue()));
+        var animation = !!animationCheck.getValue();
+        api.setPreferenceObject(SEND_PREFS, { animation: animation });
+        sendLabel.setText(bridge.send(sel, asGroup, animation));
     };
 
     function refreshOptions() {
@@ -653,6 +755,7 @@ if (typeof ui.Button === "function") {
             return;
         }
         if (++ticks % HEARTBEAT_TICKS === 0) heartbeat();
+        checkBake();
         if (!api.filePathExists(STATE_FILE)) return;   // nothing linked in C4D yet
         var modified = api.getFileModifiedDate(STATE_FILE);
         if (modified === lastModified) return;          // nothing changed: nothing to do
@@ -675,6 +778,29 @@ if (typeof ui.Button === "function") {
         refreshObjectList();
         statusLabel.setText("Connected to Cinema 4D (port " + port + ") - " + bridge.packets +
             " updates, C4D frame " + bridge.lastFrame);
+    }
+
+    // A send with Animation from Cinema 4D: turned into keys once (the bake's
+    // id is remembered, so reopening this window doesn't key it again).
+    var lastBakeModified = -1;
+    function checkBake() {
+        if (!api.filePathExists(BAKE_FILE)) return;
+        var modified = api.getFileModifiedDate(BAKE_FILE);
+        if (modified === lastBakeModified) return;
+        lastBakeModified = modified;
+        var bake;
+        try {
+            bake = JSON.parse(api.readFromFile(BAKE_FILE));
+        } catch (e) {
+            lastBakeModified = -1;   // being replaced right now: read it next time
+            return;
+        }
+        var done = api.hasPreferenceObject(LAST_BAKE_PREF) ? api.getPreferenceObject(LAST_BAKE_PREF) : {};
+        if (done.id === bake.id) return;
+        var keyed = bridge.applyBake(bake);
+        api.setPreferenceObject(LAST_BAKE_PREF, { id: bake.id });
+        statusLabel.setText("Keyed " + keyed + " layer" + (keyed === 1 ? "" : "s") + " from C4D frames " +
+            bake.first + "-" + bake.last);
     }
 
     // Connects by itself whenever Cinema 4D is running, and again after it restarts.

@@ -61,6 +61,7 @@ DEFAULT_PORT = 1234
 PRESENCE_FILE = os.path.join(tempfile.gettempdir(), "cavalry_bridge_c4d.json")       # C4D is running (port)
 STATE_FILE = os.path.join(tempfile.gettempdir(), "cavalry_bridge_state.json")        # what C4D sends live
 HEARTBEAT_FILE = os.path.join(tempfile.gettempdir(), "cavalry_bridge_cavalry.json")  # Cavalry is listening
+BAKE_FILE = os.path.join(tempfile.gettempdir(), "cavalry_bridge_bake.json")          # every frame of a send with Animation
 HEARTBEAT_SECONDS = 6.0   # Cavalry touches its file every 2 s
 
 # Private container ID holding a send's shapes as JSON (not in the
@@ -216,10 +217,11 @@ def stop():
 def _remove_state():
     """A state file left by an earlier session (or a crash) would show stale
     objects in Cavalry; start clean."""
-    try:
-        os.remove(STATE_FILE)
-    except OSError:
-        pass
+    for path in (STATE_FILE, BAKE_FILE):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def _write_presence(port):
@@ -421,6 +423,7 @@ def _build_curve(op, param, component, keys, first, samples, fps, invisible):
 
 BRIDGE_NAME = "Cavalry Bridge"
 UD_ENABLED, UD_HOST, UD_PORT, UD_OBJECTS = 1, 2, 3, 4   # the bridge tag's user data
+UD_ANIMATED = 5   # added by the panel the first time Animation is used
 SAMPLES_PER_POINT = 8   # for spline types without Bezier handles
 
 # The bridge tag's code: the work is done here, in the plugin.
@@ -784,9 +787,26 @@ def tag_draw(tag, bd):
         return True
     srv = ensure(_ud(tag, UD_HOST, DEFAULT_HOST) or DEFAULT_HOST, int(_ud(tag, UD_PORT, DEFAULT_PORT)))
     inex = _ud(tag, UD_OBJECTS, None)
-    if srv is None or inex is None:
+    if srv is None or inex is None or _baking:
         return True
+    objects, aspect = collect_objects(doc, inex, bd)
+    state = json.dumps({
+        "frame": doc.GetTime().GetFrame(doc.GetFps()),
+        "fps": doc.GetFps(),
+        "aspect": aspect,
+        # Baked objects carry their animation as keys in Cavalry; live
+        # updates would overwrite them.
+        "animated": bool(_ud(tag, UD_ANIMATED, False)),
+        "objects": objects,
+    }, separators=(",", ":")).encode("utf-8")
+    srv.state = state
+    publish_state(state)
+    return True
 
+
+def collect_objects(doc, inex, bd):
+    """The listed objects (and everything inside them) as `bd`'s camera sees
+    them now: ([object entries], frame aspect)."""
     cam = bd.GetSceneCamera(doc) or bd.GetEditorCamera()
     cam_inv = ~cam.GetMg()
     sf = bd.GetSafeFrame()
@@ -856,16 +876,44 @@ def tag_draw(tag, bd):
         obj = inex.ObjectFromIndex(doc, i)
         if obj is not None:
             walk(obj, None)
+    return objects, frame_w / frame_h
 
-    state = json.dumps({
-        "frame": doc.GetTime().GetFrame(doc.GetFps()),
-        "fps": doc.GetFps(),
-        "aspect": frame_w / frame_h,
-        "objects": objects,
-    }, separators=(",", ":")).encode("utf-8")
-    srv.state = state
-    publish_state(state)
-    return True
+
+_baking = False   # set while bake() steps through the frames
+
+
+def bake(doc, tag, bd):
+    """Steps through the preview range and writes every frame of the listed
+    objects to the bake file, for Cavalry to turn into keyframes. Returns
+    (first frame, last frame)."""
+    global _baking
+    inex = _ud(tag, UD_OBJECTS, None)
+    fps = doc.GetFps()
+    first = doc.GetLoopMinTime().GetFrame(fps)
+    last = doc.GetLoopMaxTime().GetFrame(fps)
+    now = doc.GetTime()
+    frames = []
+    _baking = True
+    try:
+        for f in range(first, last + 1):
+            doc.SetTime(c4d.BaseTime(f, fps))
+            doc.ExecutePasses(None, True, True, True, c4d.BUILDFLAGS_NONE)
+            # Redraw so the view (and an animated camera) is at this frame.
+            c4d.DrawViews(c4d.DRAWFLAGS_ONLY_ACTIVE_VIEW | c4d.DRAWFLAGS_NO_THREAD | c4d.DRAWFLAGS_STATICBREAK)
+            objects, aspect = collect_objects(doc, inex, bd)
+            frames.append({"frame": f, "objects": objects})
+    finally:
+        _baking = False
+        doc.SetTime(now)
+        doc.ExecutePasses(None, True, True, True, c4d.BUILDFLAGS_NONE)
+    data = json.dumps({"id": "%x" % int(time.time() * 1000), "fps": fps, "first": first, "last": last,
+                       "aspect": aspect if frames else 1.0, "frames": frames},
+                      separators=(",", ":")).encode("utf-8")
+    tmp = BAKE_FILE + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, BAKE_FILE)
+    return first, last
 
 
 _published = None
@@ -1175,6 +1223,7 @@ ID_SEND = 1002
 ID_SENDING = 1003
 ID_RECEIVED = 1004
 ID_ADD_SPLINE = 1005
+ID_ANIMATION = 1006
 
 
 def _describe(objs):
@@ -1209,6 +1258,7 @@ class BridgePanel(gui.GeDialog):
         self.GroupBegin(0, c4d.BFH_SCALEFIT, 1, 0, "Cinema 4D to Cavalry")
         self.GroupBorder(c4d.BORDER_GROUP_IN)
         self.GroupBorderSpace(8, 6, 8, 6)
+        self.AddCheckbox(ID_ANIMATION, c4d.BFH_SCALEFIT, 0, 0, "Animation (key every frame of the preview range)")
         self.AddButton(ID_SEND, c4d.BFH_SCALEFIT, 0, 0, "Send Selected to Cavalry")
         self.AddStaticText(ID_SENDING, c4d.BFH_SCALEFIT, 0, 0, "", c4d.BORDER_NONE)
         self.GroupEnd()
@@ -1227,6 +1277,9 @@ class BridgePanel(gui.GeDialog):
 
     def InitValues(self):
         self.SetInt32(ID_PORT, DEFAULT_PORT, 1024, 65535)
+        doc = c4d.documents.GetActiveDocument()
+        tag = find_bridge_tag(doc) if doc else None
+        self.SetBool(ID_ANIMATION, bool(tag and _ud(tag, UD_ANIMATED, False)))   # as last sent
         self.Refresh()
         self.SetTimer(1000)
         return True
@@ -1252,7 +1305,9 @@ class BridgePanel(gui.GeDialog):
         self.SetString(ID_STATUS, status)
 
         objs = linked_objects(doc, tag) if doc else []
-        if objs and _ud(tag, UD_ENABLED, True):
+        if objs and _ud(tag, UD_ENABLED, True) and _ud(tag, UD_ANIMATED, False):
+            sending = "Sent with animation: %s. Send again after changes." % _describe(objs)
+        elif objs and _ud(tag, UD_ENABLED, True):
             sending = "Sending live: " + _describe(objs)
         else:
             sending = "Select splines, objects or folders in the Object Manager, then click Send."
@@ -1309,7 +1364,15 @@ class BridgePanel(gui.GeDialog):
             inex.InsertObject(o, 1)
         tag[c4d.ID_USERDATA, UD_OBJECTS] = inex
         tag[c4d.ID_USERDATA, UD_ENABLED] = True
+        animated = self.GetBool(ID_ANIMATION) and bool(selected)
+        if _ud(tag, UD_ANIMATED, None) is None:
+            _add_ud(tag, c4d.DTYPE_BOOL, "Animation", False)   # tags made before 1.2.1
+        tag[c4d.ID_USERDATA, UD_ANIMATED] = animated
         doc.EndUndo()
+        if animated:
+            self.SetString(ID_SENDING, "Sending every frame...")
+            first, last = bake(doc, tag, doc.GetActiveBaseDraw())
+            c4d.StatusSetText("Cavalry Bridge: sent frames %d-%d" % (first, last))
         c4d.EventAdd()
         self.Refresh()
 
