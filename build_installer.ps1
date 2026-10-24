@@ -3,8 +3,7 @@
 # The exe is compiled from installer\Setup.cs with the C# compiler that comes
 # with .NET Framework 4.x (part of Windows), with the files to install
 # embedded as payload.zip:
-#   cinema4d/plugins/cavalry_bridge/...          the plugin (plus the tag code)
-#   cinema4d/scripts/Cavalry Bridge Setup.py     the C4D setup script
+#   cinema4d/plugins/cavalry_bridge/...          the Cinema 4D plugin (one .pyp + res)
 #   cavalry/C4D Bridge.js                        the Cavalry script
 # Run: powershell -ExecutionPolicy Bypass -File build_installer.ps1
 $ErrorActionPreference = 'Stop'
@@ -26,8 +25,6 @@ $files = [ordered]@{}
 foreach ($f in Get-ChildItem "$root\cavalry_bridge" -Recurse -File | Where-Object { $_.FullName -notmatch '__pycache__' }) {
     $files['cinema4d/plugins/cavalry_bridge/' + $f.FullName.Substring("$root\cavalry_bridge\".Length).Replace('\', '/')] = $f.FullName
 }
-$files['cinema4d/plugins/cavalry_bridge/c4d_bridge_tag.py'] = "$root\c4d_bridge_tag.py"
-$files['cinema4d/scripts/Cavalry Bridge Setup.py'] = "$root\install_c4d_bridge.py"
 $files['cavalry/C4D Bridge.js'] = "$root\C4D Bridge.js"
 $payload = Join-Path $build 'payload.zip'
 $zip = [System.IO.Compression.ZipFile]::Open($payload, 'Create')

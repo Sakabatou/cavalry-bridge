@@ -239,8 +239,9 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
       <div class="card">
         <span class="tag">Cinema 4D → Cavalry</span>
         <h3>Live splines in Cavalry</h3>
-        <p>Link splines or whole folders to the bridge in Cinema&nbsp;4D and they appear in Cavalry as editable shapes that follow every change you make.</p>
+        <p>Select splines, 3D objects or whole folders in Cinema&nbsp;4D, click Send, and they appear in Cavalry as editable shapes that follow every change you make.</p>
         <ul>
+          <li>3D objects (Cube, Torus, Landscape…) arrive as their outline, holes included</li>
           <li>Null folders become Cavalry groups, nested and kept in sync</li>
           <li>Renames, moves and hiding follow live</li>
           <li>Seen through the C4D camera, or flat world XY</li>
@@ -295,7 +296,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <div class="table-wrap" style="margin-top:18px">
           <table>
             <tr><th>App</th><th>Installed into</th></tr>
-            <tr><td>Cinema 4D</td><td><code>%APPDATA%\Maxon\&lt;version&gt;\plugins\cavalry_bridge</code><br><code>…\library\scripts\Cavalry Bridge Setup.py</code></td></tr>
+            <tr><td>Cinema 4D</td><td><code>%APPDATA%\Maxon\&lt;version&gt;\plugins\cavalry_bridge</code> (one plugin, opened from Extensions › Cavalry Bridge)</td></tr>
             <tr><td>Cavalry</td><td><code>%APPDATA%\Cavalry\Scripts\C4D Bridge.js</code></td></tr>
           </table>
         </div>
@@ -307,7 +308,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
 <section id="use">
   <div class="wrap">
     <h2>Use</h2>
-    <p class="sub">Everything happens from one small window in Cavalry and one menu item in Cinema&nbsp;4D.</p>
+    <p class="sub">Everything happens from two small panels: <b>Window › Scripts › C4D Bridge</b> in Cavalry and <b>Extensions › Cavalry Bridge</b> in Cinema&nbsp;4D.</p>
     <div class="grid2">
       <div class="card">
         <span class="tag">Cavalry → Cinema 4D</span>
@@ -322,9 +323,9 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <span class="tag">Cinema 4D → Cavalry</span>
         <h3>Stream splines</h3>
         <ol class="steps" style="margin-top:12px">
-          <li><strong>Select splines or folders in Cinema 4D</strong><span>Any spline or spline generator (Text, Circle, Star…), or a Null with everything inside it.</span></li>
-          <li><strong>Run Extensions › User Scripts › Cavalry Bridge Setup</strong><span>This adds a "Cavalry Bridge" null whose tag lists them.</span></li>
-          <li><strong>Watch them appear in Cavalry</strong><span>The C4D Bridge window connects by itself. Folders become groups; shapes follow your changes.</span></li>
+          <li><strong>Open Extensions › Cavalry Bridge</strong><span>The panel shows whether Cavalry is connected. Dock it anywhere, like any manager.</span></li>
+          <li><strong>Select objects and click Send Selected to Cavalry</strong><span>Splines (Text, Circle, Star…), 3D objects, or a Null with everything inside it.</span></li>
+          <li><strong>Watch them appear in Cavalry</strong><span>Folders become groups; shapes follow your changes live. Send again to send something else; click Send with nothing selected to stop.</span></li>
         </ol>
       </div>
     </div>
@@ -333,16 +334,27 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
     <div class="table-wrap" style="margin-top:10px">
       <table>
         <tr><th>Control</th><th>What it does</th></tr>
-        <tr><td>Connect · Disconnect</td><td>The window connects by itself whenever Cinema 4D is running (about 30 updates a second), and again after C4D restarts. Disconnect pauses it; Connect resumes.</td></tr>
+        <tr><td>Connect · Disconnect</td><td>The window connects by itself whenever Cinema 4D is running, and again after C4D restarts. It only does work when something in C4D changes. Disconnect pauses it; Connect resumes.</td></tr>
         <tr><td>Mode</td><td><b>Screen</b> places shapes as the C4D camera sees them. <b>World XY</b> uses C4D's X/Y coordinates.</td></tr>
         <tr><td>Rotation · Perspective scale</td><td>For non-spline objects: also follow rotation, and shrink with distance from the camera.</td></tr>
         <tr><td>Record keys</td><td>Keyframe incoming position, rotation and scale at the C4D frame, instead of only moving the layer.</td></tr>
-        <tr><td>Bind Selected</td><td>Drive your own Cavalry layer with a C4D object, instead of the placeholder the bridge creates.</td></tr>
+        <tr><td>Bind Selected</td><td>Drive your own Cavalry layer with a C4D object, instead of the layer the bridge creates.</td></tr>
         <tr><td>Send as</td><td><b>Group (keep folders)</b>: folders become Nulls, every shape its own Cavalry Spline, each with its position, rotation, scale and pivot. <b>Single object</b>: all outlines in one Cavalry Spline.</td></tr>
         <tr><td>Animation (PSR)</td><td>With Send as Group: also send each layer's and folder's position, rotation and scale keyframes.</td></tr>
         <tr><td>Send Selected to C4D</td><td>Send the selected layers to Cinema 4D.</td></tr>
       </table>
     </div>
+
+    <h3 style="margin-top:30px">The Cavalry Bridge panel in Cinema 4D</h3>
+    <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <tr><th>Control</th><th>What it does</th></tr>
+        <tr><td>Connection · Port</td><td>Whether Cavalry is connected, and the port the bridge uses (1234; change it if another program needs that port).</td></tr>
+        <tr><td>Send Selected to Cavalry</td><td>Sends the selected splines, 3D objects or folders live to Cavalry, replacing what was sent before. Folders bring everything inside. With nothing selected it stops; Cavalry hides those layers, never deletes them. The line below says what's being sent.</td></tr>
+        <tr><td>Last received · Add Cavalry Spline</td><td>What Cavalry sent last, and a Cavalry Spline that always shows the latest send.</td></tr>
+      </table>
+    </div>
+    <p style="color:var(--muted);font-size:.9rem;margin-top:8px">What's being sent is stored on a "Cavalry Bridge" Null the panel adds to your scene, so it's saved with the scene.</p>
 
     <h3 style="margin-top:30px">The Cavalry Spline object in Cinema 4D</h3>
     <div class="table-wrap" style="margin-top:10px">
@@ -360,7 +372,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
 <section id="how" class="alt">
   <div class="wrap">
     <h2>How it works</h2>
-    <p class="sub">A small web server inside Cinema&nbsp;4D, on <code>127.0.0.1:1234</code> (this computer only). The Cavalry script talks to it: it asks for C4D's splines and transforms, and posts shapes to it.</p>
+    <p class="sub">Everything stays on this computer. Cinema&nbsp;4D writes what it sends to a small file in the temp folder, only when something changes, and Cavalry checks that file's date ten times a second, which costs next to nothing. Shapes going the other way are posted to a small web server inside Cinema&nbsp;4D on <code>127.0.0.1:1234</code>.</p>
     <div class="diagram">
       <svg viewBox="0 0 900 300" role="img" aria-label="Cavalry's C4D Bridge script talks to a server inside the Cinema 4D plugin over 127.0.0.1:1234">
         <defs>
@@ -371,7 +383,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <rect class="box" x="10" y="40" width="250" height="220" rx="14"/>
         <text class="boxtitle" x="30" y="72">Cavalry</text>
         <text class="boxtext" x="30" y="96">C4D Bridge.js (script window)</text>
-        <text class="boxtext" x="30" y="126">• Timer: GET /state ~30×/s</text>
+        <text class="boxtext" x="30" y="126">• Timer: reads the state file when it changes</text>
         <text class="boxtext" x="30" y="148">• editable shapes / layers</text>
         <text class="boxtext" x="30" y="178">• Send: outlines, transforms,</text>
         <text class="boxtext" x="42" y="196">keyframes + per-frame samples</text>
@@ -380,17 +392,17 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <rect class="box" x="560" y="20" width="330" height="260" rx="14"/>
         <text class="boxtitle" x="580" y="52">Cinema 4D: cavalry_bridge plugin</text>
         <rect class="pill" x="580" y="66" width="290" height="30" rx="8"/>
-        <text class="pilltext" x="594" y="86">HTTP server  127.0.0.1:1234</text>
+        <text class="pilltext" x="594" y="86">state file + HTTP server 127.0.0.1:1234</text>
         <text class="boxtext" x="580" y="124">Cavalry Spline: spline generator,</text>
         <text class="boxtext" x="592" y="142">one per send, data saved in the scene</text>
         <text class="boxtext" x="580" y="170">Receiver: creates objects + PSR keys</text>
         <text class="boxtext" x="592" y="188">on the main thread (curve fitting)</text>
-        <text class="boxtext" x="580" y="216">Cavalry Bridge tag: publishes linked</text>
-        <text class="boxtext" x="592" y="234">splines / transforms each redraw</text>
+        <text class="boxtext" x="580" y="216">Cavalry Bridge tag: writes sent splines</text>
+        <text class="boxtext" x="592" y="234">and 3D outlines when they change</text>
         <text class="boxtext" x="592" y="252">(as the active camera sees them)</text>
         <!-- wires -->
         <path class="wire" d="M262 112 C 400 112, 420 100, 556 100" marker-end="url(#arrowB)"/>
-        <text class="wtext" x="320" y="96">GET /state</text>
+        <text class="wtext" x="320" y="96">state file (temp folder)</text>
         <text class="wsub" x="320" y="128">← splines &amp; transforms (JSON)</text>
         <path class="wire2" d="M262 190 C 400 190, 420 200, 556 200" marker-end="url(#arrowO)"/>
         <text class="wtext" x="320" y="182">POST /shapes</text>
@@ -405,7 +417,8 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
           <li><b>Rotation:</b> Cavalry turns counter-clockwise, C4D's bank turns clockwise, so the sign flips.</li>
           <li><b>Curves:</b> Cavalry stores Bézier handles as absolute points. C4D's spline tangents are relative, and ¾ the length of a standard Bézier handle (C4D's own circle uses 41.4 for radius 100, not 55.2).</li>
           <li><b>Layer transforms:</b> Cavalry draws a layer at position + rotation · scale · (local − pivot). Sent as a group, each outline travels relative to its own pivot and each position relative to its parent's pivot, so Nulls in C4D reproduce every level exactly.</li>
-          <li><b>Finding each other:</b> while Cinema 4D runs, the plugin keeps a small file in the temp folder with its port. Cavalry reads it to connect by itself, without waiting on a refused connection.</li>
+          <li><b>Finding each other:</b> while Cinema 4D runs, the plugin keeps a small file in the temp folder with its port. Cavalry reads it to connect by itself, without waiting on a refused connection, and leaves a heartbeat file so the C4D panel can show it's connected.</li>
+          <li><b>3D objects:</b> all their faces are projected through the camera (or flat onto XY) and filled into a fine grid. The edge of the filled area is traced, straightened, and its corners snapped back onto the mesh's own points, so a Plane arrives as 4 points and a Cone seen from the front as 3.</li>
         </ul>
       </div>
       <div class="card">
@@ -485,6 +498,22 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <h3>1.1: folders, both ways</h3>
         <p>Sending a Cavalry group now rebuilds it in C4D as Nulls with every level's position, rotation, scale and pivot (and keyframes). The test group, rotated and scaled with an animated child, landed within 1 px of Cavalry at every frame checked. From C4D, linking a Null streams its whole hierarchy into Cavalry groups, following renames, moves and hiding live; deleted objects are hidden, never deleted.</p>
       </li>
+      <li class="problem">
+        <h3>1.2: a panel instead of scripts</h3>
+        <p>In real use, sending from Cinema&nbsp;4D was hard to find: it meant selecting objects and running a script, and User Scripts had grown three bridge entries (one current, two old copies). Now Extensions › Cavalry Bridge opens a panel with the connection status, one Send button and what last arrived. A first version had a list and five buttons; testing showed that selecting objects and clicking Send is all anyone wants. The plugin became a single file, and the installer removes the old scripts.</p>
+      </li>
+      <li class="problem">
+        <h3>1.2: a busy console, and a quiet one</h3>
+        <p>Cavalry's console filled with a request every 33&nbsp;ms, even when nothing moved. Now Cinema&nbsp;4D writes a state file only when something changes, and Cavalry just checks its date. One slip on the way: Cavalry's <code>writeToFile</code> won't replace a file unless told to, so the first heartbeat logged an error every two seconds.</p>
+      </li>
+      <li class="problem">
+        <h3>1.2: a Plane arrived as a circle</h3>
+        <p>3D objects had no spline to send, so Cavalry drew a placeholder circle. Tracing the edges where front faces meet back faces gave jagged blobs: seams, poles and faces seen edge-on broke the loops. What works is plainer: fill every projected face into a grid, trace the filled area, then snap its corners back onto the mesh. Plane, Cone, Torus, Sphere, a rotated Cube and a Landscape now match the C4D view, holes included.</p>
+      </li>
+      <li class="problem">
+        <h3>1.2: shapes missing in the Front view</h3>
+        <p>Some objects reached Cavalry's layer list but never drew. Flat views (Front, Top…) place their camera anywhere, so objects could sit "behind" it, and the bridge skipped them. Only a perspective camera has a behind now.</p>
+      </li>
     </ol>
   </div>
 </section>
@@ -502,7 +531,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
             <li>The status line under "Send Selected to C4D" says whether C4D was reachable.</li>
           </ul></details>
         <details><summary>Cavalry keeps "Waiting for Cinema 4D"</summary>
-          <p>Cinema 4D must be running with the Cavalry Bridge plugin loaded (restart it after installing). If another program uses port 1234, change the Port on the Cavalry Bridge tag; Cavalry picks up the new port by itself.</p></details>
+          <p>Cinema 4D must be running with the Cavalry Bridge plugin loaded (restart it after installing); Extensions › Cavalry Bridge shows its status. If another program uses port 1234, change the Port in that panel; Cavalry picks up the new port by itself.</p></details>
         <details><summary>Bind Selected moved my layers</summary>
           <p>Binding a layer to a C4D folder makes it that folder: the bridge then puts the folder's layers inside it. Pick the object you mean in the Bind dropdown before clicking.</p></details>
         <details><summary>Keyframes land between frames</summary>
@@ -518,10 +547,11 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
             <li>Single object merges outlines in world space, without animation; use Group for keyframes.</li>
             <li>Animated outlines (text animators, trims) arrive as they look at the playhead frame.</li>
             <li>C4D → Cavalry: splines aren't keyframed in Cavalry. Cubic, Akima and B-spline curves are sent as many straight segments.</li>
+            <li>3D objects arrive as one flat outline (their silhouette), without inner edges or shading. Above 120,000 triangles they arrive as their convex outline.</li>
             <li>Windows only for now. The scripts themselves aren't Windows-specific.</li>
           </ul></details>
         <details><summary>Is it safe?</summary>
-          <p>The server only listens on <code>127.0.0.1</code>, so other computers can't reach it. Setup writes only to your own user folders and never needs admin rights. Uninstall removes everything.</p></details>
+          <p>The server only listens on <code>127.0.0.1</code>, so other computers can't reach it, and the shared files stay in your own temp folder. Setup writes only to your own user folders and never needs admin rights. Uninstall removes everything.</p></details>
       </div>
     </div>
   </div>
@@ -533,12 +563,9 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
     <p class="sub">Everything is plain text: Python for Cinema&nbsp;4D, JavaScript for Cavalry, C# for the installer. One command rebuilds the setup program.</p>
     <div class="grid2">
       <pre><code>cavalry_bridge/                  Cinema 4D plugin
-  cavalry_bridge.pyp             Cavalry Spline + receiver
-  cavalry_bridge_server.py       local HTTP server
-  cavalry_bridge_anim.py         keyframes + curve fitting
+  cavalry_bridge.pyp             all of it: panel, Cavalry Spline,
+                                 local server, keyframe fitting
   res/                           settings, strings, icon
-c4d_bridge_tag.py                Cavalry Bridge tag code
-install_c4d_bridge.py            "Cavalry Bridge Setup" script
 C4D Bridge.js                    Cavalry script window
 installer/                       Setup.cs, manifest, icon
 build_installer.ps1              builds dist\CavalryBridgeSetup-x.y.z.exe
@@ -547,7 +574,7 @@ docs/                            this page</code></pre>
         <p>Requires Windows with .NET Framework 4.x (built in), and nothing else:</p>
         <pre><code>powershell -ExecutionPolicy Bypass -File build_installer.ps1</code></pre>
         <p style="color:var(--muted)">The setup also runs from the command line: <code>/silent</code>, <code>/uninstall</code>, <code>/log &lt;file&gt;</code>.</p>
-        <div class="note">The plugin's IDs are registered with Maxon: 1071603 (Cavalry Spline) and 1071604 (receiver). Keep them if you fork it: the Cavalry Spline ID is saved in every scene that uses one.</div>
+        <div class="note">The plugin's IDs are registered with Maxon: 1071603 (Cavalry Spline), 1071604 (receiver) and 1072165 (panel). Keep them if you fork it: the Cavalry Spline ID is saved in every scene that uses one.</div>
       </div>
     </div>
   </div>
@@ -555,7 +582,7 @@ docs/                            this page</code></pre>
 
 <footer>
   <div class="wrap">
-    <span>Cavalry Bridge 1.1.0 · <a data-repo href="">Source on GitHub</a></span>
+    <span>Cavalry Bridge 1.2.0 · <a data-repo href="">Source on GitHub</a></span>
     <span>Cinema 4D is a trademark of Maxon. Cavalry is made by Scene Group / Canva. This project isn't affiliated with either.</span>
   </div>
 </footer>

@@ -2,9 +2,11 @@
 //
 // Finds Cinema 4D and Cavalry and installs the bridge into each program's
 // own user folders (no admin rights needed):
-//   Cinema 4D  %APPDATA%\Maxon\<version>\plugins\cavalry_bridge\
-//              %APPDATA%\Maxon\<version>\library\scripts\Cavalry Bridge Setup.py
+//   Cinema 4D  %APPDATA%\Maxon\<version>\plugins\cavalry_bridge\   (Extensions > Cavalry Bridge)
 //   Cavalry    %APPDATA%\Cavalry\Scripts\C4D Bridge.js
+// It also removes the User Scripts earlier versions used in Cinema 4D
+// (library\scripts\Cavalry Bridge Setup.py and older copies), now replaced by
+// the plugin's panel.
 // The files travel inside this exe as an embedded zip (payload.zip).
 //
 // Command line (for automation and testing):
@@ -30,8 +32,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Cavalry Bridge Setup")]
 [assembly: AssemblyProduct("Cavalry Bridge")]
 [assembly: AssemblyDescription("Installs the Cavalry Bridge into Cinema 4D and Cavalry")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace CavalryBridgeSetup
 {
@@ -43,7 +45,7 @@ namespace CavalryBridgeSetup
         public bool Installed;
 
         public string PluginDir { get { return Path.Combine(Folder, "plugins", Setup.PluginName); } }
-        public string SetupScript { get { return Path.Combine(Folder, "library", "scripts", Setup.SetupScriptName); } }
+        public string ScriptsDir { get { return Path.Combine(Folder, "library", "scripts"); } }
         public string CavalryScript { get { return Path.Combine(Folder, "Scripts", Setup.CavalryScriptName); } }
 
         public override string ToString()
@@ -54,10 +56,28 @@ namespace CavalryBridgeSetup
 
     static class Setup
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.2.0";
         public const string PluginName = "cavalry_bridge";
-        public const string SetupScriptName = "Cavalry Bridge Setup.py";
         public const string CavalryScriptName = "C4D Bridge.js";
+
+        // Cinema 4D User Scripts from earlier versions (or copied in by hand
+        // from the project), replaced by the plugin's panel.
+        static readonly string[] OldScripts = { "Cavalry Bridge Setup.py", "install_c4d_bridge.py", "c4d_bridge_tag.py" };
+
+        // Removes the old scripts - only files that are ours (they mention the bridge).
+        static int RemoveOldScripts(Target t, Action<string> log)
+        {
+            int removed = 0;
+            foreach (var name in OldScripts)
+            {
+                string path = Path.Combine(t.ScriptsDir, name);
+                if (!File.Exists(path) || File.ReadAllText(path).IndexOf("Cavalry Bridge", StringComparison.Ordinal) < 0) continue;
+                File.Delete(path);
+                log("    removed old script " + path);
+                removed++;
+            }
+            return removed;
+        }
 
         // ------------------------------------------------------------ detect
 
@@ -198,10 +218,9 @@ namespace CavalryBridgeSetup
                     // Replace the plugin folder as a whole so no stale files are left over.
                     if (Directory.Exists(t.PluginDir)) Directory.Delete(t.PluginDir, true);
                     Extract(zip, "cinema4d/plugins/", Path.Combine(t.Folder, "plugins"));
-                    Extract(zip, "cinema4d/scripts/", Path.GetDirectoryName(t.SetupScript));
                     log(t.Label + ": " + (t.Installed ? "updated" : "installed"));
                     log("    " + t.PluginDir);
-                    log("    " + t.SetupScript);
+                    RemoveOldScripts(t, log);
                 }
                 else
                 {
@@ -219,7 +238,7 @@ namespace CavalryBridgeSetup
             if (t.IsC4D)
             {
                 if (Directory.Exists(t.PluginDir)) { Directory.Delete(t.PluginDir, true); removed = true; }
-                if (File.Exists(t.SetupScript)) { File.Delete(t.SetupScript); removed = true; }
+                if (RemoveOldScripts(t, log) > 0) removed = true;
             }
             else if (File.Exists(t.CavalryScript))
             {
@@ -232,9 +251,8 @@ namespace CavalryBridgeSetup
 
         public const string NextSteps =
             "Next steps\r\n" +
-            "  Cinema 4D: sending from Cavalry creates Cavalry Spline objects automatically.\r\n" +
-            "    To stream splines to Cavalry, select them and run\r\n" +
-            "    Extensions > User Scripts > Cavalry Bridge Setup.\r\n" +
+            "  Cinema 4D: open Extensions > Cavalry Bridge. Select splines or folders and\r\n" +
+            "    click Send Selected to Cavalry; shapes sent from Cavalry arrive by themselves.\r\n" +
             "  Cavalry: open Window > Scripts > C4D Bridge. The first time, Cavalry asks\r\n" +
             "    whether to trust the script (it makes local network calls) - choose to trust it.";
 

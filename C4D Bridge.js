@@ -1,8 +1,10 @@
 // C4D Bridge - live link between Cavalry and Cinema 4D.
 //
-// Cinema 4D -> Cavalry: polls the "Cavalry Bridge" tag in Cinema 4D (served
-// by the cavalry_bridge plugin at http://127.0.0.1:<port>/state) and drives
-// one Cavalry layer per C4D object. Splines become editable shapes that
+// Cinema 4D -> Cavalry: applies what Cinema 4D's Cavalry Bridge panel sends.
+// The plugin rewrites a state file in the temp folder only when something
+// changes; this window checks its modification time (cheap, no requests, no
+// console output) and reads it only then. It drives one Cavalry layer per C4D
+// object. Splines become editable shapes that
 // follow the spline's geometry, other objects drive a layer's position,
 // rotation and scale, and C4D folders (objects with children) become groups,
 // so whole hierarchies come across.
@@ -24,7 +26,10 @@
 var BRIDGE_KEY = "c4dBridgeId";      // user data: C4D GUID this layer follows
 var AUTO_KEY = "c4dBridgeAuto";      // user data: layer was created by the bridge
 var GROUP_KEY = "c4dBridgeGroup";    // user data: the "C4D Bridge" group
-var PRESENCE_FILE = api.getTempFolder() + "/cavalry_bridge_c4d.json";
+// Files in the temp folder both apps share (see the Cinema 4D plugin):
+var PRESENCE_FILE = api.getTempFolder() + "/cavalry_bridge_c4d.json";        // C4D is running (port)
+var STATE_FILE = api.getTempFolder() + "/cavalry_bridge_state.json";         // what C4D sends, rewritten only on change
+var HEARTBEAT_FILE = api.getTempFolder() + "/cavalry_bridge_cavalry.json";   // this window is listening
 
 // Layers that are folders even without children.
 var FOLDER_TYPES = { group: 1, "null": 1, layoutGroup: 1, gridLayoutGroup: 1, schedulingGroup: 1 };
@@ -85,11 +90,26 @@ bridge.isAuto = function (id) {
     return api.hasUserDataKey(id, AUTO_KEY) && api.getUserDataKey(id, AUTO_KEY);
 };
 
+// The layer type the bridge makes for a C4D object.
+bridge.layerTypeFor = function (obj) {
+    return obj.kind === "folder" ? "group" : obj.spline ? "editableShape" : "basicShape";
+};
+
 bridge.layerForObject = function (obj) {
     var id = bridge.layerFor[obj.id];
-    if (id && api.layerExists(id)) return id;
-    bridge.rescan();
-    id = bridge.layerFor[obj.id];
+    if (!id || !api.layerExists(id)) {
+        bridge.rescan();
+        id = bridge.layerFor[obj.id];
+    }
+    // A layer the bridge made for an earlier kind of data (a placeholder
+    // circle for what now arrives as an outline, say) is replaced; layers
+    // you bound yourself are never touched.
+    // (The new layer lands in the right group in apply's parenting pass.)
+    if (id && bridge.isAuto(id) && api.getLayerType(id) !== bridge.layerTypeFor(obj)) {
+        api.deleteLayer(id);
+        delete bridge.layerFor[obj.id];
+        id = null;
+    }
     if (id) return id;
     if (!bridge.options.create) return null;
     if (obj.kind === "folder") {
@@ -126,6 +146,7 @@ bridge.splinePath = function (segments, res) {
     var path = [];
     for (var s = 0; s < segments.length; s++) {
         var pts = o.mode === 0 ? segments[s].screen : segments[s].world;
+        if (!pts) continue;   // polygon outlines come separately for each view
         var points = [];
         for (var p = 0; p < pts.length; p++) {
             var q = pts[p];
@@ -493,14 +514,17 @@ bridge.send = function (ids, asGroup, animation) {
 // (Skipped when this file is evaluated outside a Script Window.)
 
 if (typeof ui.Button === "function") {
-    var POLL_MS = 33;        // ~30 updates per second while connected
-    var WATCH_MS = 1000;     // look for Cinema 4D once a second while not
-    var client = null;
+    // While connected, a cheap check of the state file's modification time
+    // 10 times a second; the file is only read when Cinema 4D has changed it.
+    var CHECK_MS = 100;
+    var WATCH_MS = 1000;      // look for Cinema 4D once a second while not connected
+    var HEARTBEAT_TICKS = 20; // touch the heartbeat file every 2 s (20 checks)
+    var connected = false;
     var lastBody = null;
+    var lastModified = -1;
+    var ticks = 0;
     var port = null;
-    var stamp = null;        // which Cinema 4D run we're talking to
-    var failedStamp = null;  // a run that didn't answer: don't retry it
-    var autoConnect = true;  // off after Disconnect, until Connect
+    var autoConnect = true;   // off after Disconnect, until Connect
 
     var connectButton = new ui.Button("Connect");
     var statusLabel = new ui.Label("Looking for Cinema 4D...");
@@ -556,6 +580,7 @@ if (typeof ui.Button === "function") {
         o.create = createCheck.getValue();
         o.record = recordCheck.getValue();
         lastBody = null;   // re-apply the current state with the new options
+        lastModified = -1;
         bridge.pathCache = {};
     }
     modeDrop.onValueChanged = refreshOptions;
@@ -582,12 +607,27 @@ if (typeof ui.Button === "function") {
         }
         bridge.bind(guid, sel[0]);
         lastBody = null;
+        lastModified = -1;
         console.log("C4D Bridge: " + api.getNiceName(sel[0]) + " now follows " + bridge.names[guid]);
     };
 
+    // Tells the Cinema 4D panel this window is listening.
+    function heartbeat() {
+        try {
+            api.writeToFile(HEARTBEAT_FILE, String(Date.now()), true);   // true: overwrite
+        } catch (e) { /* the panel just shows "waiting" */ }
+    }
+
+    function stopHeartbeat() {
+        try {
+            if (api.filePathExists(HEARTBEAT_FILE)) api.deleteFilePath(HEARTBEAT_FILE);
+        } catch (e) { }
+    }
+
     function disconnect(message) {
-        pollTimer.stop();
-        client = null;
+        checkTimer.stop();
+        connected = false;
+        stopHeartbeat();
         connectButton.setText("Connect");
         statusLabel.setText(message);
     }
@@ -596,29 +636,35 @@ if (typeof ui.Button === "function") {
         refreshOptions();
         bridge.rescan();
         port = presence.port;
-        stamp = presence.pid + "/" + presence.started;
-        client = new api.WebClient("http://127.0.0.1:" + port);
+        connected = true;
+        lastModified = -1;
+        heartbeat();
         connectButton.setText("Disconnect");
-        statusLabel.setText("Connecting to Cinema 4D on port " + port + "...");
-        poll();
-        if (client) pollTimer.start();
+        statusLabel.setText("Connected to Cinema 4D (port " + port + ") - nothing sent from C4D yet");
+        check();
+        checkTimer.start();
     }
 
-    function poll() {
-        // Cinema 4D removes the presence file when it quits: notice that
-        // without a (blocking) refused connection.
+    // Applies what Cinema 4D sends - only when its state file has changed.
+    function check() {
+        // Cinema 4D removes the presence file when it quits.
         if (!api.filePathExists(PRESENCE_FILE)) {
             disconnect("Cinema 4D closed - waiting for it to start");
             return;
         }
-        client.get("/state");
-        if (client.status() !== 200) {
-            failedStamp = stamp;
-            disconnect("Cinema 4D isn't answering on port " + port + " - click Connect to retry");
+        if (++ticks % HEARTBEAT_TICKS === 0) heartbeat();
+        if (!api.filePathExists(STATE_FILE)) return;   // nothing linked in C4D yet
+        var modified = api.getFileModifiedDate(STATE_FILE);
+        if (modified === lastModified) return;          // nothing changed: nothing to do
+        lastModified = modified;
+        var body;
+        try {
+            body = api.readFromFile(STATE_FILE);
+        } catch (e) {
+            lastModified = -1;   // being replaced right now: read it next time
             return;
         }
-        var body = client.body();
-        if (body === lastBody) return;   // nothing moved in C4D
+        if (!body || body === lastBody) return;
         lastBody = body;
         try {
             bridge.apply(JSON.parse(body));
@@ -627,53 +673,51 @@ if (typeof ui.Button === "function") {
             return;
         }
         refreshObjectList();
-        statusLabel.setText("Connected to Cinema 4D on port " + port + " - " + bridge.packets +
+        statusLabel.setText("Connected to Cinema 4D (port " + port + ") - " + bridge.packets +
             " updates, C4D frame " + bridge.lastFrame);
     }
 
     // Connects by itself whenever Cinema 4D is running, and again after it restarts.
     function watch() {
-        if (client || !autoConnect) return;
+        if (connected || !autoConnect) return;
         var p = bridge.presence();
         if (!p) {
             statusLabel.setText("Waiting for Cinema 4D (with the Cavalry Bridge plugin)...");
             return;
         }
-        if (p.pid + "/" + p.started === failedStamp) return;
         connect(p);
     }
 
-    function PollCallbacks() {
+    function CheckCallbacks() {
         this.onTimeout = function () {
-            if (client) poll();
+            if (connected) check();
         };
     }
     function WatchCallbacks() {
         this.onTimeout = watch;
     }
-    var pollTimer = new api.Timer(new PollCallbacks());
-    pollTimer.setInterval(POLL_MS);
-    pollTimer.setRepeating(true);
+    var checkTimer = new api.Timer(new CheckCallbacks());
+    checkTimer.setInterval(CHECK_MS);
+    checkTimer.setRepeating(true);
     var watchTimer = new api.Timer(new WatchCallbacks());
     watchTimer.setInterval(WATCH_MS);
     watchTimer.setRepeating(true);
 
-    // Connected: Disconnect (and stop reconnecting). Otherwise: try now,
-    // including a Cinema 4D that didn't answer before.
+    // Connected: Disconnect (and stop reconnecting). Otherwise: connect now.
     connectButton.onClick = function () {
-        if (client) {
+        if (connected) {
             autoConnect = false;
             disconnect("Disconnected - click Connect to reconnect");
             return;
         }
         autoConnect = true;
-        failedStamp = null;
         watch();
     };
 
     ui.onClose = function () {
-        pollTimer.stop();
+        checkTimer.stop();
         watchTimer.stop();
+        stopHeartbeat();
     };
 
     function row(labelText, widget) {
