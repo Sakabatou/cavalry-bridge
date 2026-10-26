@@ -72,6 +72,10 @@ docs/                      project page (GitHub Pages)
 - Windows only for now.
 - Plugin IDs are registered with Maxon: **1071603** (Cavalry Spline), **1071604** (receiver) and **1072165** (panel). Scenes made with the 1.0.0 test-ID build won't load their Cavalry Splines in later versions; send the shapes again.
 
+## Licence
+
+Copyright © 2026 Orc Design. All rights reserved. You may download Cavalry Bridge and use it for your own work, free of charge. You may not share, redistribute or modify it without written permission; link to the [project page](https://sakabatou.github.io/cavalry-bridge/) instead. See [LICENSE](LICENSE) for the full terms.
+
 ---
 
 Cinema 4D is a trademark of Maxon. Cavalry is made by Scene Group / Canva. This project isn't affiliated with either.
