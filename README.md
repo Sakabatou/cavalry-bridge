@@ -20,6 +20,7 @@ Send Cavalry shapes, with their animation, to Cinema&nbsp;4D as real splines. St
 | **…as a group or one object** | *Send as: Group* rebuilds your **folders as Nulls**, each shape its own Cavalry Spline with its position, rotation, scale and pivot. *Send as: Single object* merges everything into one spline. |
 | **…with animation** | With *Animation (PSR)* ticked, layers and folders bring their position, rotation and scale **keyframes**. Eases are rebuilt as curve handles on the original keys. |
 | **Cinema 4D → Cavalry** | Splines, **3D objects** and **whole folders** sent from the Cavalry Bridge panel appear in Cavalry as **editable shapes inside matching groups**, following every change (renames, moves, hiding) live, seen through the C4D camera or in world XY. 3D objects arrive as their outline, holes included. Tick **Animation** to key every frame of the preview range instead, one layer per object. |
+| **…in 3D** | Mode *3D (C4D camera)* rebuilds the scene in Cavalry's 2.5D space: the C4D camera becomes a Cavalry **camera** (position, rotation and lens), and splines, text and planes stand as flat shapes where they are in C4D, turning in 3D. Cavalry draws the perspective, so its camera can reframe the scene. Solid objects stand as their outline facing the camera. Tick **Camera animation** to key the camera on every frame. |
 
 The Cavalry window **connects by itself** whenever Cinema 4D is running, and only does work when something changes. Everything stays on your own computer: a state file in your temp folder, and `127.0.0.1:1234` for sending shapes to C4D.
 
@@ -42,6 +43,8 @@ If Windows shows "Windows protected your PC" (the setup isn't code-signed yet), 
 **Cavalry → Cinema 4D:** select layers or groups in Cavalry, choose *Send as* (Group or Single object), optionally tick *Animation (PSR)*, then click **Send Selected to C4D**.
 
 **Cinema 4D → Cavalry:** open **Extensions › Cavalry Bridge**, select splines, 3D objects or folders (Nulls) and click **Send Selected to Cavalry**. Sending again replaces what's sent; Send with nothing selected stops. Tick *Animation* first to key every frame in Cavalry. The panel shows the connection, what's being sent and what Cavalry sent last; the C4D Bridge window in Cavalry connects by itself.
+
+**In 3D:** in Cavalry's C4D Bridge window, set *Mode* to **3D (C4D camera)**. A *C4D Camera* layer appears in the C4D Bridge group and follows the C4D camera; untick *Follow C4D camera* to reframe it yourself (its Position Offset and Look At Offset are always yours). *World scale* sets Cavalry pixels per C4D unit without changing the framing. In C4D, tick **Camera animation** before sending to key the camera on every frame of the preview range (the Cavalry window switches to 3D by itself when those keys arrive); with *Animation* ticked too, the objects are keyed as well, and shapes that keep their form get transform keys only.
 
 The [project page](https://sakabatou.github.io/cavalry-bridge/) explains every setting, how the bridge works, and how it was built.
 
@@ -66,7 +69,8 @@ docs/                      project page (GitHub Pages)
 ## Limits
 
 - Only outlines transfer. Fills, gradients, stroke widths and effects don't, and strokes arrive as their centre line.
-- 3D objects arrive as their flat silhouette, without inner edges or shading.
+- 3D objects arrive as their flat silhouette, without inner edges or shading. In 3D mode a solid object is a flat card facing the C4D camera, so it looks right through that camera but stays flat when Cavalry's camera reframes.
+- 3D mode needs a perspective camera. Film offset doesn't carry over (Cavalry's camera has none), and the comp should have the same aspect ratio as the C4D render; the window says so when either differs.
 - Animation covers keyframed position, rotation and scale (with *Send as: Group*). Behaviour-driven motion (Noise, Oscillator) isn't included.
 - If the two apps run at different frame rates, keyframes keep their timing in seconds, so they can land between frames.
 - Windows only for now.

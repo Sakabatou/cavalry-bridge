@@ -9,6 +9,12 @@
 // rotation and scale, and C4D folders (objects with children) become groups,
 // so whole hierarchies come across.
 //
+// Mode "3D (C4D camera)" uses Cavalry's 2.5D space instead of a flat
+// picture: the C4D camera becomes a Cavalry camera, flat objects (splines,
+// text, planes) stand in 3D where they are in C4D, and other outlines stand
+// facing the camera at the object's distance. Cavalry draws the perspective,
+// so its camera can reframe the scene.
+//
 // Cavalry -> Cinema 4D: "Send Selected to C4D" sends the selected layers.
 //   Group          folders become Nulls and every shape its own Cavalry
 //                  Spline, each with its layer's position / rotation / scale
@@ -26,12 +32,17 @@
 var BRIDGE_KEY = "c4dBridgeId";      // user data: C4D GUID this layer follows
 var AUTO_KEY = "c4dBridgeAuto";      // user data: layer was created by the bridge
 var GROUP_KEY = "c4dBridgeGroup";    // user data: the "C4D Bridge" group
+var CAMERA_KEY = "c4dBridgeCamera";  // user data: the "C4D Camera" the 3D mode drives
 // Files in the temp folder both apps share (see the Cinema 4D plugin):
 var PRESENCE_FILE = api.getTempFolder() + "/cavalry_bridge_c4d.json";        // C4D is running (port)
 var STATE_FILE = api.getTempFolder() + "/cavalry_bridge_state.json";         // what C4D sends, rewritten only on change
 var HEARTBEAT_FILE = api.getTempFolder() + "/cavalry_bridge_cavalry.json";   // this window is listening
 var BAKE_FILE = api.getTempFolder() + "/cavalry_bridge_bake.json";           // every frame of a send with Animation
 var BAKED_KEY = "c4dBridgeBaked";    // user data: layer holds keys from a C4D bake
+var STYLED_KEY = "c4dBridgeStyled";  // user data: stroke / fill already set up (yours to change after)
+var PIVOT_KEY = "c4dBridgePivot";    // user data: the C4D axis the layer was last placed on (JSON)
+var COLOR_KEY = "c4dBridgeColor";    // user data: the C4D Display Color last applied (hex)
+var SPLINE_STROKE_WIDTH = 2;
 var LAST_BAKE_PREF = "c4dBridgeLastBake";   // id of the bake already turned into keys
 
 // Layers that are folders even without children.
@@ -44,11 +55,15 @@ var bridge = {
     names: {},          // C4D GUID -> C4D object name (last seen)
     hiddenByBridge: {}, // C4D GUID -> true when hidden because it left the C4D scene
     groupId: null,
+    cameraId: null,
     packets: 0,
     lastFrame: null,
+    warning: "",        // what the 3D mode can't carry over, for the status line
+    keyedFromBake: false,   // C4D's last send came with Animation or Camera animation
     options: {
-        mode: 0,          // 0 = Screen (camera view), 1 = World XY
-        worldScale: 1,    // World mode: Cavalry px per C4D unit
+        mode: 0,          // 0 = Screen (camera view), 1 = World XY, 2 = 3D (C4D camera)
+        worldScale: 1,    // World and 3D modes: Cavalry px per C4D unit
+        followCamera: true,   // 3D mode: drive the Cavalry camera from C4D's
         rotation: true,
         perspectiveScale: true,
         create: true,
@@ -67,20 +82,48 @@ bridge.presence = function () {
     }
 };
 
+// The bridge works in the active comp: its group, camera and layers in
+// other comps are left alone.
+bridge.compLayers = function () {
+    return api.getCompLayers(false);
+};
+
+bridge.inComp = function (id) {
+    return api.layerExists(id) && api.getParentComp(id) === api.getActiveComp();
+};
+
 bridge.findGroup = function () {
-    if (bridge.groupId && api.layerExists(bridge.groupId)) return bridge.groupId;
-    var all = api.getAllSceneLayers();
+    if (bridge.groupId && bridge.inComp(bridge.groupId)) return bridge.groupId;
+    var all = bridge.compLayers();
     for (var i = 0; i < all.length; i++) {
         if (api.hasUserDataKey(all[i], GROUP_KEY)) return (bridge.groupId = all[i]);
     }
     bridge.groupId = api.create("group", "C4D Bridge");
+    // New layers go into the selected one: keep the group at the top.
+    if (!bridge.isRootParent(api.getParent(bridge.groupId))) api.parent(bridge.groupId, api.getActiveComp());
     api.setUserData(bridge.groupId, GROUP_KEY, true);
     return bridge.groupId;
 };
 
+// The camera the 3D mode drives ("C4D Camera" in the C4D Bridge group),
+// made when `create` and there's none yet.
+bridge.findCamera = function (create) {
+    if (bridge.cameraId && bridge.inComp(bridge.cameraId)) return bridge.cameraId;
+    var all = bridge.compLayers();
+    for (var i = 0; i < all.length; i++) {
+        if (api.hasUserDataKey(all[i], CAMERA_KEY)) return (bridge.cameraId = all[i]);
+    }
+    if (!create) return null;
+    var id = api.create("planarCamera", "C4D Camera");
+    api.parent(id, bridge.findGroup());
+    api.set(id, { cameraType: 0 });   // Freeform: turned by its rotation, like C4D's
+    api.setUserData(id, CAMERA_KEY, true);
+    return (bridge.cameraId = id);
+};
+
 bridge.rescan = function () {
     bridge.layerFor = {};
-    var all = api.getAllSceneLayers();
+    var all = bridge.compLayers();
     for (var i = 0; i < all.length; i++) {
         if (api.hasUserDataKey(all[i], BRIDGE_KEY)) {
             var guid = api.getUserDataKey(all[i], BRIDGE_KEY);
@@ -100,7 +143,7 @@ bridge.layerTypeFor = function (obj) {
 
 bridge.layerForObject = function (obj) {
     var id = bridge.layerFor[obj.id];
-    if (!id || !api.layerExists(id)) {
+    if (!id || !bridge.inComp(id)) {
         bridge.rescan();
         id = bridge.layerFor[obj.id];
     }
@@ -138,17 +181,35 @@ bridge.bind = function (guid, layerId) {
     bridge.layerFor[guid] = layerId;
 };
 
-// C4D spline -> path of an editable shape, in world space. Points come as
-// [x, y, inX, inY, outX, outY] with absolute handles, either in C4D world XY
-// or in normalised screen coordinates (0..1, y down).
-bridge.splinePath = function (segments, res) {
+// A C4D point -> comp coordinates: from C4D world XY, or from normalised
+// screen coordinates (0..1, y down).
+bridge.compPoint = function (u, v, res) {
     var o = bridge.options;
-    var map = o.mode === 0
-        ? function (u, v) { return { x: (u - 0.5) * res.x, y: (0.5 - v) * res.y }; }
-        : function (u, v) { return { x: u * o.worldScale, y: v * o.worldScale }; };
+    return o.mode !== 1
+        ? { x: (u - 0.5) * res.x, y: (0.5 - v) * res.y }
+        : { x: u * o.worldScale, y: v * o.worldScale };
+};
+
+// Where the C4D object's axis is, in comp coordinates (the comp centre for
+// older plugins that don't send it).
+bridge.pivotFor = function (obj, res) {
+    var p = obj.pivot && (bridge.options.mode !== 1 ? obj.pivot.screen : obj.pivot.world);
+    return p ? bridge.compPoint(p[0], p[1], res) : { x: 0, y: 0 };
+};
+
+// C4D spline -> path of an editable shape, relative to `origin` (the
+// object's axis). Points come as [x, y, inX, inY, outX, outY] with absolute
+// handles.
+bridge.splinePath = function (segments, res, origin) {
+    var o = bridge.options;
+    var ox = origin ? origin.x : 0, oy = origin ? origin.y : 0;
+    var map = function (u, v) {
+        var c = bridge.compPoint(u, v, res);
+        return { x: c.x - ox, y: c.y - oy };
+    };
     var path = [];
     for (var s = 0; s < segments.length; s++) {
-        var pts = o.mode === 0 ? segments[s].screen : segments[s].world;
+        var pts = o.mode !== 1 ? segments[s].screen : segments[s].world;
         if (!pts) continue;   // polygon outlines come separately for each view
         var points = [];
         for (var p = 0; p < pts.length; p++) {
@@ -160,15 +221,63 @@ bridge.splinePath = function (segments, res) {
     return path;
 };
 
+// C4D splines draw as strokes without a fill, like in the C4D view: open
+// curves have nothing to fill, and a fill would cover the curves inside a
+// closed one. Set once per layer, so your own stroke and fill changes stay.
+bridge.style = function (id, obj) {
+    if (!obj.stroke || api.getLayerType(id) !== "editableShape") return;
+    if (api.hasUserDataKey(id, STYLED_KEY) && api.getUserDataKey(id, STYLED_KEY)) return;
+    api.setStroke(id, true);
+    api.setFill(id, false);
+    api.set(id, { "stroke.width": SPLINE_STROKE_WIDTH });
+    api.setUserData(id, STYLED_KEY, true);
+};
+
+// The C4D object's Display Color: the stroke of a spline, the fill of
+// anything else. Applied only when it changes in C4D, so a colour you pick
+// in Cavalry stays until the C4D one changes.
+bridge.colour = function (id, obj) {
+    if (!obj.color) return;
+    var hex = "#" + obj.color.map(function (c) {
+        var v = Math.max(0, Math.min(255, Math.round(c * 255))).toString(16);
+        return v.length < 2 ? "0" + v : v;
+    }).join("");
+    if (api.hasUserDataKey(id, COLOR_KEY) && api.getUserDataKey(id, COLOR_KEY) === hex) return;
+    var set = {};
+    if (obj.stroke && api.hasStroke(id)) set["stroke.strokeColor"] = hex;
+    else set["material.materialColor"] = hex;
+    try {
+        api.set(id, set);
+        api.setUserData(id, COLOR_KEY, hex);
+    } catch (e) { /* a layer without a fill or stroke */ }
+};
+
 bridge.pathCache = {};   // layer id -> last path JSON, to skip unchanged splines
+
+// The layer sits on the C4D object's axis and its path is drawn around it,
+// so rotating or scaling it in Cavalry turns it around the same point as in
+// C4D. When the axis moves, the layer moves by as much: a position you gave
+// it yourself is kept as an offset.
+bridge.moveToPivot = function (id, pivot) {
+    var last = { x: 0, y: 0 };   // layers from before 1.2.3 drew around the comp centre
+    if (api.hasUserDataKey(id, PIVOT_KEY) && api.getUserDataKey(id, PIVOT_KEY)) {
+        last = JSON.parse(api.getUserDataKey(id, PIVOT_KEY));
+    }
+    if (last.x === pivot.x && last.y === pivot.y) return;
+    var pos = api.get(id, "position");
+    api.set(id, { position: [pos.x + pivot.x - last.x, pos.y + pivot.y - last.y] });
+    api.setUserData(id, PIVOT_KEY, JSON.stringify(pivot));
+};
 
 bridge.applySpline = function (id, obj, res) {
     if (bridge.options.mode === 0 && obj.depth <= 0) return;   // behind the camera
-    var path = bridge.splinePath(obj.spline, res);
-    var json = JSON.stringify(path);
+    var pivot = bridge.pivotFor(obj, res);
+    var path = bridge.splinePath(obj.spline, res, pivot);
+    var json = JSON.stringify([pivot, path]);
     if (bridge.pathCache[id] === json) return;
     try {
-        api.setEditablePath(id, true, path);
+        bridge.moveToPivot(id, pivot);
+        api.setEditablePath(id, false, path);
         bridge.pathCache[id] = json;
     } catch (e) {
         console.warn("C4D Bridge: " + api.getNiceName(id) + " is not an editable shape, " +
@@ -214,9 +323,192 @@ bridge.transformFor = function (obj, res) {
     return values;
 };
 
+// ---------------------------------------------------------------- 3D mode
+//
+// Cavalry's 2.5D space: x right, y up, z towards the viewer. Its camera
+// looks down its own -z and Zoom is its focal length in pixels. C4D's space
+// has z pointing away from the viewer, so z flips on the way over.
+
+var V3 = {
+    cav: function (p, k) { return [p[0] * k, p[1] * k, -p[2] * k]; },   // C4D -> Cavalry
+    add: function (a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; },
+    scale: function (a, k) { return [a[0] * k, a[1] * k, a[2] * k]; },
+    dot: function (a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; },
+    cross: function (a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; },
+    len: function (a) { return Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); }
+};
+
+// Rotation values (degrees) that turn a layer, or the camera, so its local
+// axes point along the unit vectors x, y, z. Measured in Cavalry: a 2.5D
+// layer turns by Rx(-x) Ry(-y) Rz(z), the camera by Rx(-x) Ry(-y) Rz(-z).
+bridge.euler = function (x, y, z, camera) {
+    var deg = 180 / Math.PI;
+    var b = Math.asin(Math.max(-1, Math.min(1, z[0])));
+    var a = Math.atan2(-z[1], z[2]);
+    var c = Math.atan2(-y[0], x[0]);
+    return [-a * deg, -b * deg, (camera ? -c : c) * deg];
+};
+
+// The C4D camera's axes in Cavalry space (it looks down its +z, Cavalry's
+// down its -z).
+bridge.cameraAxes = function (cam) {
+    return [V3.cav(cam.x, 1), V3.cav(cam.y, 1), V3.scale(V3.cav(cam.z, 1), -1)];
+};
+
+// The C4D camera as Cavalry camera values, or null (no perspective camera).
+bridge.cameraValues = function (cam, res) {
+    if (!cam || !cam.perspective || !cam.focal) return null;
+    var ax = bridge.cameraAxes(cam);
+    var rot = bridge.euler(ax[0], ax[1], ax[2], true);
+    var pos = V3.cav(cam.pos, bridge.options.worldScale);
+    return {
+        "position.x": pos[0], "position.y": pos[1], "position.z": pos[2],
+        "rotation.x": rot[0], "rotation.y": rot[1], "rotation.z": rot[2],
+        zoom: cam.focal * res.x
+    };
+};
+
+// Layer values for a card: on the card's origin, its x and y along the
+// card's u and v (scaled by their length; a slant between them can't be
+// shown, so v is straightened).
+bridge.cardValues = function (card) {
+    var u = V3.cav(card.u, 1), v = V3.cav(card.v, 1);
+    var su = V3.len(u) || 1e-9;
+    var x = V3.scale(u, 1 / su);
+    var vy = V3.add(v, V3.scale(x, -V3.dot(v, x)));
+    var sv = V3.len(vy) || 1e-9;
+    var y = V3.scale(vy, 1 / sv);
+    var rot = bridge.euler(x, y, V3.cross(x, y), false);
+    var pos = V3.cav(card.o, bridge.options.worldScale);
+    return {
+        "position.x": pos[0], "position.y": pos[1], "position.z": pos[2],
+        "rotation.x": rot[0], "rotation.y": rot[1], "rotation.z": rot[2],
+        "scale.x": su, "scale.y": sv
+    };
+};
+
+// A card's shape as an editable path in the layer's own space.
+bridge.cardPath = function (card) {
+    var k = bridge.options.worldScale;
+    var P = function (a, b) { return { x: a * k, y: b * k }; };
+    return card.path.map(function (c) {
+        return {
+            isClosed: c.closed,
+            points: c.points.map(function (q) {
+                return { position: P(q[0], q[1]), inHandle: P(q[2], q[3]), outHandle: P(q[4], q[5]) };
+            })
+        };
+    });
+};
+
+// Outlines that aren't flat (a Cube, a curve in 3D) stand as a card facing
+// the C4D camera at the object's distance, sized so that through that
+// camera they look exactly as in C4D. Returns {values, path} or null.
+bridge.billboard = function (obj, cam, res) {
+    if (!cam || !cam.perspective || !cam.focal || !(obj.depth > 0)) return null;
+    var k = bridge.options.worldScale;
+    var ax = bridge.cameraAxes(cam);
+    var d = obj.depth * k;                 // distance from the camera, px
+    var s = d / (cam.focal * res.x);       // px on the card per px on screen
+    var pivot = bridge.pivotFor(obj, res);
+    // Measured from the view's centre (where a film offset put it in C4D).
+    var shift = cam.shift || [0, 0];
+    var cx = pivot.x - shift[0] * res.x, cy = pivot.y + shift[1] * res.y;
+    var pos = V3.add(V3.cav(cam.pos, k),
+        V3.add(V3.add(V3.scale(ax[0], cx * s), V3.scale(ax[1], cy * s)), V3.scale(ax[2], -d)));
+    var rot = bridge.euler(ax[0], ax[1], ax[2], false);
+    return {
+        values: {
+            "position.x": pos[0], "position.y": pos[1], "position.z": pos[2],
+            "rotation.x": rot[0], "rotation.y": rot[1], "rotation.z": rot[2],
+            "scale.x": s, "scale.y": s
+        },
+        path: bridge.splinePath(obj.spline, res, pivot)
+    };
+};
+
+// Where an object goes in 3D: {values, path} (path null for objects without
+// a shape), or null when it can't be placed (behind the camera...).
+bridge.place3d = function (obj, cam, res) {
+    if (obj.card) return { values: bridge.cardValues(obj.card), path: obj.card.path ? bridge.cardPath(obj.card) : null };
+    if (obj.spline) return bridge.billboard(obj, cam, res);
+    return null;
+};
+
+// The 3D mode needs 2.5D layers (a flat layer ignores the camera); the
+// other modes flat ones.
+bridge.set3d = function (id, on) {
+    try {
+        if (!!api.get(id, "is3d") === on) return;
+        api.set(id, { is3d: on });
+        if (!on) api.set(id, { "position.z": 0, "rotation.x": 0, "rotation.y": 0 });
+    } catch (e) { /* a layer without 3D transforms */ }
+};
+
+bridge.apply3d = function (id, obj, cam, res, frame) {
+    var placed = bridge.place3d(obj, cam, res);
+    if (!placed) return;
+    if (placed.path) {
+        var json = JSON.stringify(placed.path);
+        if (bridge.pathCache[id] !== json) {
+            try {
+                api.setEditablePath(id, false, placed.path);
+                bridge.pathCache[id] = json;
+            } catch (e) {
+                console.warn("C4D Bridge: " + api.getNiceName(id) + " is not an editable shape, " +
+                    "so it can't follow the shape of " + obj.name);
+            }
+        }
+    }
+    if (bridge.options.record) api.keyframe(id, frame, placed.values);
+    else api.set(id, placed.values);
+    // Back in a flat mode, moveToPivot then starts from where the layer is.
+    api.setUserData(id, PIVOT_KEY, JSON.stringify({ x: placed.values["position.x"], y: placed.values["position.y"] }));
+};
+
+// The C4D Camera: shown and following C4D in the 3D mode (unless its moves
+// arrived as keys, or Follow C4D camera is off), hidden otherwise so it
+// doesn't turn your own 2.5D layers.
+bridge.applyCamera = function (packet, res) {
+    var three = bridge.options.mode === 2;
+    var id = bridge.findCamera(three && !!packet.camera);
+    if (!id) return;
+    if (!!api.get(id, "hidden") === three) api.set(id, { hidden: !three });
+    if (!three || packet.cameraBaked || !bridge.options.followCamera) return;
+    if (bridge.isBaked(id)) bridge.unbake(id);
+    var values = bridge.cameraValues(packet.camera, res);
+    if (!values) return;
+    if (bridge.options.record) api.keyframe(id, packet.frame, values);
+    else api.set(id, values);
+};
+
+// What the 3D mode can't carry over from this camera ("" when all is well).
+bridge.check3d = function (cam, aspect, res) {
+    if (!cam) return "update the Cavalry Bridge plugin in Cinema 4D for 3D";
+    if (!cam.perspective) return "3D needs a perspective camera in Cinema 4D";
+    var notes = [];
+    if (cam.shift && (Math.abs(cam.shift[0]) > 1e-3 || Math.abs(cam.shift[1]) > 1e-3)) {
+        notes.push("the camera's film offset isn't carried over");
+    }
+    if (aspect && Math.abs(aspect - res.x / res.y) > 0.01 * aspect) {
+        notes.push("the comp's aspect differs from the C4D render's");
+    }
+    return notes.join(", ");
+};
+
+// Keeps rotations continuous from one key to the next (no spins at 180).
+bridge.unwrap = function (values, prev) {
+    if (!prev) return values;
+    ["rotation.x", "rotation.y", "rotation.z"].forEach(function (a) {
+        if (a in values && a in prev) values[a] += 360 * Math.round((prev[a] - values[a]) / 360);
+    });
+    return values;
+};
+
 // ------------------------------------------------- C4D animation -> keys
 
-var BAKED_ATTRS = ["inputPath", "position.x", "position.y", "rotation.z", "scale.x", "scale.y"];
+var BAKED_ATTRS = ["inputPath", "position.x", "position.y", "position.z", "rotation.x", "rotation.y",
+    "rotation.z", "scale.x", "scale.y", "zoom"];
 
 bridge.isBaked = function (id) {
     return api.hasUserDataKey(id, BAKED_KEY) && api.getUserDataKey(id, BAKED_KEY);
@@ -228,6 +520,9 @@ bridge.unbake = function (id) {
         try { api.deleteAnimation(id, BAKED_ATTRS[i]); } catch (e) { /* not animated */ }
     }
     api.setUserData(id, BAKED_KEY, false);
+    // Back to following live from a known place (moveToPivot starts again).
+    api.set(id, { position: [0, 0] });
+    api.setUserData(id, PIVOT_KEY, "");
     delete bridge.pathCache[id];
 };
 
@@ -295,59 +590,108 @@ bridge.padPoints = function (points, n) {
 };
 
 // A send from C4D with Animation: one layer per object, keyed on every frame
-// (outlines as path keys, other objects as position / rotation / scale keys).
-// Returns the number of keyed layers.
+// (outlines as path keys, other objects as position / rotation / scale
+// keys); with Camera animation, the C4D Camera too (3D mode only). Returns
+// the number of keyed layers.
 bridge.applyBake = function (bake) {
     var res = api.get(api.getActiveComp(), "resolution");
     var fps = api.get(api.getActiveComp(), "fps");
     var frames = bake.frames || [];
     if (!frames.length) return 0;
-    // Layers, names and groups as for a live update (geometry is skipped).
-    bridge.apply({ objects: frames[0].objects, frame: frames[0].frame, animated: true });
-    var tracks = {};   // C4D GUID -> [[Cavalry frame, object], ...]
-    for (var i = 0; i < frames.length; i++) {
-        var at = Math.round(frames[i].frame / bake.fps * fps);   // same time in seconds
-        for (var j = 0; j < frames[i].objects.length; j++) {
-            var obj = frames[i].objects[j];
-            if (obj.kind === "folder") continue;
-            (tracks[obj.id] = tracks[obj.id] || []).push([at, obj]);
+    var three = bridge.options.mode === 2;
+    var at = function (f) { return Math.round(f.frame / bake.fps * fps); };   // same time in seconds
+    var keyed = 0;
+    if (bake.keyObjects !== false) {   // (bakes from before 1.3.0 have no flags: objects only)
+        // Layers, names and groups as for a live update (geometry is skipped).
+        bridge.apply({ objects: frames[0].objects, frame: frames[0].frame, animated: true,
+                       camera: frames[0].camera, cameraBaked: true });
+        var tracks = {};   // C4D GUID -> [[Cavalry frame, object, camera], ...]
+        for (var i = 0; i < frames.length; i++) {
+            for (var j = 0; j < frames[i].objects.length; j++) {
+                var obj = frames[i].objects[j];
+                if (obj.kind === "folder") continue;
+                (tracks[obj.id] = tracks[obj.id] || []).push([at(frames[i]), obj, frames[i].camera]);
+            }
+        }
+        for (var guid in tracks) {
+            if (bridge.keyTrack(bridge.layerFor[guid], tracks[guid], res, three)) keyed++;
         }
     }
-    var keyed = 0;
-    for (var guid in tracks) {
-        var id = bridge.layerFor[guid];
-        if (!id || !api.layerExists(id)) continue;
-        bridge.unbake(id);
-        var track = tracks[guid];
-        if (track[0][1].spline) {
-            if (api.getLayerType(id) !== "editableShape") continue;
-            // Keys hold the path in the layer's own space: keep that space plain.
-            api.set(id, { position: [0, 0], rotation: 0, scale: [1, 1] });
-            var fillType = (api.get(id, "inputPath") || {}).fillType;
-            var keys = [];
-            for (var k = 0; k < track.length; k++) {
-                var o = track[k][1];
-                if (!o.spline || (bridge.options.mode === 0 && o.depth <= 0)) continue;
-                var path = bridge.splinePath(o.spline, res);
-                if (path.length) keys.push([track[k][0], path]);
-            }
-            var paths = bridge.matchPaths(keys.map(function (kp) { return kp[1]; }));
-            for (var m = 0; m < keys.length; m++) {
-                api.keyframe(id, keys[m][0], { inputPath: bridge.pathValue(paths[m], fillType) });
-            }
-            // Path keys written by script need their point ids rebuilt, or
-            // Cavalry logs "Error re-syncing Point UIDs" while it animates.
-            api.resyncPathKeyframes(id, "inputPath");
-        } else {
-            for (var t = 0; t < track.length; t++) {
-                var values = bridge.transformFor(track[t][1], res);
-                if (values) api.keyframe(id, track[t][0], values);
-            }
+    if (bake.keyCamera && three && bridge.keyCamera(frames, at, res)) keyed++;
+    return keyed;
+};
+
+// Keys one layer from its frames of a bake ([[frame, object, camera], ...]);
+// returns whether it did.
+bridge.keyTrack = function (id, track, res, three) {
+    if (!id || !api.layerExists(id)) return false;
+    bridge.unbake(id);
+    var prev = null, values, t;
+    if (!track[0][1].spline) {
+        for (t = 0; t < track.length; t++) {
+            values = three ? (bridge.place3d(track[t][1], track[t][2], res) || {}).values
+                : bridge.transformFor(track[t][1], res);
+            if (!values) continue;
+            prev = bridge.unwrap(values, prev);
+            api.keyframe(id, track[t][0], values);
         }
         api.setUserData(id, BAKED_KEY, true);
-        keyed++;
+        return true;
     }
-    return keyed;
+    if (api.getLayerType(id) !== "editableShape") return false;
+    var keys = [];   // [frame, path, transform values]
+    for (t = 0; t < track.length; t++) {
+        var o = track[t][1];
+        if (!o.spline) continue;
+        if (three) {
+            var placed = bridge.place3d(o, track[t][2], res);
+            if (placed && placed.path && placed.path.length) keys.push([track[t][0], placed.path, placed.values]);
+        } else if (bridge.options.mode !== 0 || o.depth > 0) {
+            // The path around the object's axis and the axis as the
+            // position, so the layer pivots like the C4D object on every frame.
+            var pivot = bridge.pivotFor(o, res);
+            var path = bridge.splinePath(o.spline, res, pivot);
+            if (path.length) keys.push([track[t][0], path, { "position.x": pivot.x, "position.y": pivot.y }]);
+        }
+    }
+    if (!three) api.set(id, { position: [0, 0], rotation: 0, scale: [1, 1] });
+    var fillType = (api.get(id, "inputPath") || {}).fillType;
+    // A shape that keeps its form (a card that only moves or turns) needs
+    // no path keys, just its transform's.
+    var first = keys.length ? JSON.stringify(keys[0][1]) : null;
+    var same = keys.every(function (kv) { return JSON.stringify(kv[1]) === first; });
+    if (same && keys.length) api.setEditablePath(id, false, keys[0][1]);
+    var paths = same ? null : bridge.matchPaths(keys.map(function (kv) { return kv[1]; }));
+    for (var m = 0; m < keys.length; m++) {
+        values = bridge.unwrap(keys[m][2], prev);
+        prev = values;
+        var key = {};
+        for (var a in values) key[a] = values[a];
+        if (!same) key.inputPath = bridge.pathValue(paths[m], fillType);
+        api.keyframe(id, keys[m][0], key);
+    }
+    // Path keys written by script need their point ids rebuilt, or
+    // Cavalry logs "Error re-syncing Point UIDs" while it animates.
+    if (!same) api.resyncPathKeyframes(id, "inputPath");
+    api.setUserData(id, BAKED_KEY, true);
+    return true;
+};
+
+// Keys the C4D Camera on every frame of a bake; returns whether it did.
+bridge.keyCamera = function (frames, at, res) {
+    var id = bridge.findCamera(true);
+    if (api.get(id, "hidden")) api.set(id, { hidden: false });
+    bridge.unbake(id);
+    var prev = null, any = false;
+    for (var i = 0; i < frames.length; i++) {
+        var values = bridge.cameraValues(frames[i].camera, res);
+        if (!values) continue;
+        prev = bridge.unwrap(values, prev);
+        api.keyframe(id, at(frames[i]), values);
+        any = true;
+    }
+    api.setUserData(id, BAKED_KEY, true);
+    return any;
 };
 
 bridge.isRootParent = function (parent) {
@@ -356,6 +700,7 @@ bridge.isRootParent = function (parent) {
 
 bridge.apply = function (packet) {
     var res = api.get(api.getActiveComp(), "resolution");
+    var three = bridge.options.mode === 2;
     var objects = packet.objects || [];
     var seen = {};
     for (var i = 0; i < objects.length; i++) {
@@ -371,14 +716,24 @@ bridge.apply = function (packet) {
             if (!!api.get(id, "hidden") !== hide) api.set(id, { hidden: hide });
             delete bridge.hiddenByBridge[obj.id];
         }
+        bridge.set3d(id, three);
         if (obj.kind === "folder") continue;
         // Sent with Animation: the layer's keys carry the motion; following
         // live would overwrite them. Sent without: drop any old keys first.
+        if (bridge.isAuto(id)) {
+            bridge.style(id, obj);
+            if (obj.kind !== "folder") bridge.colour(id, obj);
+        }
         if (packet.animated) continue;
         if (bridge.isBaked(id)) bridge.unbake(id);
-        if (obj.spline) bridge.applySpline(id, obj, res);
+        if (three) bridge.apply3d(id, obj, packet.camera, res, packet.frame);
+        else if (obj.spline) bridge.applySpline(id, obj, res);
         else bridge.applyTransform(id, obj, res, packet.frame);
     }
+    bridge.applyCamera(packet, res);
+    bridge.warning = three ? bridge.check3d(packet.camera, packet.aspect, res)
+        : packet.cameraBaked ? "the keyed C4D camera shows in Mode 3D" : "";
+    bridge.keyedFromBake = !!(packet.animated || packet.cameraBaked);
     // Rebuild the C4D hierarchy: each layer the bridge made goes into the
     // group of its C4D parent (or the "C4D Bridge" group at the top).
     for (var j = 0; j < objects.length; j++) {
@@ -684,10 +1039,17 @@ if (typeof ui.Button === "function") {
     var modeDrop = new ui.DropDown();
     modeDrop.addEntry("Screen (camera view)");
     modeDrop.addEntry("World XY");
+    var MODE_3D = "3D (C4D camera)";
+    modeDrop.addEntry(MODE_3D);
+    modeDrop.setToolTip("Screen: the C4D view as a flat picture. World XY: C4D's XY plane. " +
+        "3D: a Cavalry camera matching C4D's, with the objects standing in 2.5D space");
     var worldScaleField = new ui.NumericField(1);
     worldScaleField.setType(1);
     worldScaleField.setStep(0.1);
-    worldScaleField.setToolTip("World XY mode: Cavalry pixels per C4D unit");
+    worldScaleField.setToolTip("World XY and 3D modes: Cavalry pixels per C4D unit");
+    var followCameraCheck = new ui.Checkbox(true);
+    followCameraCheck.setToolTip("3D mode: the C4D Camera layer follows the Cinema 4D camera. " +
+        "Untick to reframe it yourself");
 
     var rotationCheck = new ui.Checkbox(true);
     var perspectiveCheck = new ui.Checkbox(true);
@@ -731,7 +1093,15 @@ if (typeof ui.Button === "function") {
 
     function refreshOptions() {
         var o = bridge.options;
-        o.mode = String(modeDrop.getText()).indexOf("World") < 0 ? 0 : 1;
+        var text = String(modeDrop.getText());
+        var mode = text.indexOf("3D") >= 0 ? 2 : text.indexOf("World") >= 0 ? 1 : 0;
+        if (mode !== o.mode && bridge.keyedFromBake) {
+            // Keys made for the other mode: make them again from the last bake.
+            lastBakeModified = -1;
+            api.setPreferenceObject(LAST_BAKE_PREF, {});
+        }
+        o.mode = mode;
+        o.followCamera = followCameraCheck.getValue();
         o.worldScale = worldScaleField.getValue();
         o.rotation = rotationCheck.getValue();
         o.perspectiveScale = perspectiveCheck.getValue();
@@ -743,6 +1113,7 @@ if (typeof ui.Button === "function") {
     }
     modeDrop.onValueChanged = refreshOptions;
     worldScaleField.onValueChanged = refreshOptions;
+    followCameraCheck.onValueChanged = refreshOptions;
     rotationCheck.onValueChanged = refreshOptions;
     perspectiveCheck.onValueChanged = refreshOptions;
     createCheck.onValueChanged = refreshOptions;
@@ -833,7 +1204,7 @@ if (typeof ui.Button === "function") {
         }
         refreshObjectList();
         statusLabel.setText("Connected to Cinema 4D (port " + port + ") - " + bridge.packets +
-            " updates, C4D frame " + bridge.lastFrame);
+            " updates, C4D frame " + bridge.lastFrame + (bridge.warning ? " - " + bridge.warning : ""));
     }
 
     // A send with Animation from Cinema 4D: turned into keys once (the bake's
@@ -853,10 +1224,17 @@ if (typeof ui.Button === "function") {
         }
         var done = api.hasPreferenceObject(LAST_BAKE_PREF) ? api.getPreferenceObject(LAST_BAKE_PREF) : {};
         if (done.id === bake.id) return;
+        // The keyed camera only shows in the 3D mode: switch to it (once per
+        // send, so you can switch back).
+        var switched = bake.keyCamera && bridge.options.mode !== 2;
+        if (switched) {
+            modeDrop.setText(MODE_3D);
+            refreshOptions();
+        }
         var keyed = bridge.applyBake(bake);
         api.setPreferenceObject(LAST_BAKE_PREF, { id: bake.id });
         statusLabel.setText("Keyed " + keyed + " layer" + (keyed === 1 ? "" : "s") + " from C4D frames " +
-            bake.first + "-" + bake.last);
+            bake.first + "-" + bake.last + (switched ? " - Mode switched to 3D for the keyed camera" : ""));
     }
 
     // Connects by itself whenever Cinema 4D is running, and again after it restarts.
@@ -924,6 +1302,7 @@ if (typeof ui.Button === "function") {
     ui.add(new ui.Label("Cinema 4D to Cavalry"));
     ui.add(row("Mode", modeDrop));
     ui.add(row("World scale", worldScaleField));
+    ui.add(row("Follow C4D camera", followCameraCheck));
     ui.add(row("Rotation", rotationCheck));
     ui.add(row("Perspective scale", perspectiveCheck));
     ui.add(row("Create layers", createCheck));

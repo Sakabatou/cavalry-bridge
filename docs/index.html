@@ -245,6 +245,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
           <li>Null folders become Cavalry groups, nested and kept in sync</li>
           <li>Renames, moves and hiding follow live</li>
           <li>Seen through the C4D camera, or flat world XY</li>
+          <li>Or in 3D: a Cavalry camera matching C4D's, with splines, text and planes standing in 2.5D space</li>
           <li>Tick Animation to key every frame: one layer per object, ready to render</li>
           <li>Connects by itself whenever Cinema 4D is running</li>
         </ul>
@@ -328,6 +329,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
           <li><strong>Select objects and click Send Selected to Cavalry</strong><span>Splines (Text, Circle, Star…), 3D objects, or a Null with everything inside it.</span></li>
           <li><strong>Watch them appear in Cavalry</strong><span>Folders become groups; shapes follow your changes live. Send again to send something else; click Send with nothing selected to stop.</span></li>
           <li><strong>Optional: tick Animation before sending</strong><span>Every frame of the preview range is keyed in Cavalry, one layer per object. Send again after changing the animation.</span></li>
+          <li><strong>Optional: 3D</strong><span>In Cavalry, set Mode to 3D (C4D camera). Tick Camera animation in C4D before sending to key the camera's moves too; Cavalry then switches to 3D by itself.</span></li>
         </ol>
       </div>
     </div>
@@ -337,7 +339,9 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
       <table>
         <tr><th>Control</th><th>What it does</th></tr>
         <tr><td>Connect · Disconnect</td><td>The window connects by itself whenever Cinema 4D is running, and again after C4D restarts. It only does work when something in C4D changes. Disconnect pauses it; Connect resumes.</td></tr>
-        <tr><td>Mode</td><td><b>Screen</b> places shapes as the C4D camera sees them. <b>World XY</b> uses C4D's X/Y coordinates.</td></tr>
+        <tr><td>Mode</td><td><b>Screen</b> places shapes as the C4D camera sees them. <b>World XY</b> uses C4D's X/Y coordinates. <b>3D (C4D camera)</b> rebuilds the scene in Cavalry's 2.5D space: a <i>C4D Camera</i> layer matches the C4D camera's position, rotation and lens, and flat objects (splines, text, planes) stand where they are in C4D, turning in 3D. Solid objects stand as their outline facing the camera. Cavalry draws the perspective, so you can reframe with its camera.</td></tr>
+        <tr><td>World scale</td><td>World XY and 3D: Cavalry pixels per C4D unit. In 3D it scales the camera too, so the framing stays the same.</td></tr>
+        <tr><td>Follow C4D camera</td><td>3D: the C4D Camera layer follows Cinema 4D's camera. Untick it to reframe yourself; its Position Offset and Look At Offset are always yours.</td></tr>
         <tr><td>Rotation · Perspective scale</td><td>For non-spline objects: also follow rotation, and shrink with distance from the camera.</td></tr>
         <tr><td>Record keys</td><td>Keyframe incoming position, rotation and scale at the C4D frame, instead of only moving the layer.</td></tr>
         <tr><td>Bind Selected</td><td>Drive your own Cavalry layer with a C4D object, instead of the layer the bridge creates.</td></tr>
@@ -353,6 +357,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <tr><th>Control</th><th>What it does</th></tr>
         <tr><td>Connection · Port</td><td>Whether Cavalry is connected, and the port the bridge uses (1234; change it if another program needs that port).</td></tr>
         <tr><td>Animation</td><td>Send keys every frame of the preview range in Cavalry instead of following live: each outline becomes a path key, other objects get position, rotation and scale keys. Cameras, deformers and generators are all taken into account, since it records what the view shows.</td></tr>
+        <tr><td>Camera animation</td><td>For Cavalry's 3D mode: key the C4D Camera layer's position, rotation and zoom on every frame of the preview range, with or without Animation. The Cavalry window switches to 3D by itself when the keys arrive (you can switch back). In 3D, shapes that keep their form get transform keys only, no path keys.</td></tr>
         <tr><td>Send Selected to Cavalry</td><td>Sends the selected splines, 3D objects or folders live to Cavalry, replacing what was sent before. Folders bring everything inside. With nothing selected it stops; Cavalry hides those layers, never deletes them. The line below says what's being sent.</td></tr>
         <tr><td>Last received · Add Cavalry Spline</td><td>What Cavalry sent last, and a Cavalry Spline that always shows the latest send.</td></tr>
       </table>
@@ -529,6 +534,10 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
         <h3>1.2.2: a flood of "Point UIDs" errors</h3>
         <p>Cavalry's console filled with "Error re-syncing Point UIDs on Animating Path". Cavalry pairs points from one path key to the next, and a turning cube's outline has a different number of points (sometimes of contours) on each frame. Now every frame is padded to the same layout: extra points are copies of existing ones, and a contour missing on a frame shrinks to a single point, so the shape on each frame stays exactly the same.</p>
       </li>
+      <li>
+        <h3>1.3: a 3D mode, measured rather than guessed</h3>
+        <p>Cavalry's camera has a Zoom but no field of view, and its docs don't say which way its axes turn. So coloured dots were placed at known 3D positions, rendered through a camera at a range of settings, and located in the pictures. Zoom turned out to be the focal length in pixels, the camera looks down −Z, and layers and the camera turn in slightly different orders. With that, a moving C4D camera and rotated Rectangle, Circle, Text, Plane and Cube matched the C4D render within a pixel or two on every frame tested.</p>
+      </li>
     </ol>
   </div>
 </section>
@@ -563,6 +572,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: 
             <li>Animated outlines (text animators, trims) arrive as they look at the playhead frame.</li>
             <li>C4D → Cavalry: animation arrives as a key on every frame (tick Animation), not as the original keys. Cubic, Akima and B-spline curves are sent as many straight segments.</li>
             <li>3D objects arrive as one flat outline (their silhouette), without inner edges or shading. Above 120,000 triangles they arrive as their convex outline.</li>
+            <li>3D mode: solid objects are flat cards facing the C4D camera, so they stay flat when Cavalry's camera reframes. It needs a perspective camera; film offset doesn't carry over, and the comp should match the C4D render's aspect ratio (the window says when it doesn't).</li>
             <li>Windows only for now. The scripts themselves aren't Windows-specific.</li>
           </ul></details>
         <details><summary>Is it safe?</summary>
@@ -597,7 +607,7 @@ docs/                            this page</code></pre>
 
 <footer>
   <div class="wrap">
-    <span>Cavalry Bridge 1.2.2 · © 2026 Orc Design. All rights reserved: free to use, not to share or modify (<a href="https://github.com/Sakabatou/cavalry-bridge/blob/main/LICENSE">licence</a>) · <a data-repo href="">Source on GitHub</a></span>
+    <span>Cavalry Bridge 1.3.0 · © 2026 Orc Design. All rights reserved: free to use, not to share or modify (<a href="https://github.com/Sakabatou/cavalry-bridge/blob/main/LICENSE">licence</a>) · <a data-repo href="">Source on GitHub</a></span>
     <span>Cinema 4D is a trademark of Maxon. Cavalry is made by Scene Group / Canva. This project isn't affiliated with either.</span>
   </div>
 </footer>

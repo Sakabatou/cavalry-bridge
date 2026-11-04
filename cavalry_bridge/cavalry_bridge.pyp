@@ -19,6 +19,8 @@
 # lists the objects to send; the panel creates and manages it. The tag's
 # draw() publishes what the active camera sees (screen positions follow the
 # camera exactly), and the bridge's local HTTP server hands that to Cavalry.
+# It also publishes the camera itself and, for flat objects, a card (their
+# shape in their own plane and where that plane is), for Cavalry's 3D mode.
 #
 # Cinema 4D -> Cavalry goes through a file, so nothing runs while nothing
 # changes: the bridge tag rewrites cavalry_bridge_state.json (temp folder)
@@ -424,6 +426,7 @@ def _build_curve(op, param, component, keys, first, samples, fps, invisible):
 BRIDGE_NAME = "Cavalry Bridge"
 UD_ENABLED, UD_HOST, UD_PORT, UD_OBJECTS = 1, 2, 3, 4   # the bridge tag's user data
 UD_ANIMATED = 5   # added by the panel the first time Animation is used
+UD_CAMERA = 6     # ...and Camera animation (after Animation, so the IDs stay in order)
 SAMPLES_PER_POINT = 8   # for spline types without Bezier handles
 
 # The bridge tag's code: the work is done here, in the plugin.
@@ -474,13 +477,12 @@ def _segments(rs):
     return out
 
 
-def _spline_data(obj, bd, sf):
-    """World-space Bezier segments of a spline object (or None), each point
-    as (position, in handle, out handle), in world XY and on screen."""
+def _spline_local(obj):
+    """Bezier segments of a spline object in its own space (or None), each
+    as (closed, [(position, in handle, out handle), ...])."""
     rs = obj.GetRealSpline()
     if rs is None or rs.GetPointCount() == 0:
         return None
-    mg = obj.GetMg()  # GetRealSpline points are in the object's space
     stype = rs.GetInterpolationType()
     segments = []
     for s, (start, count, closed) in enumerate(_segments(rs)):
@@ -499,13 +501,129 @@ def _spline_data(obj, bd, sf):
             for k in range(n):
                 q = rs.GetSplinePoint(k / float(n if closed else n - 1), s)
                 triples.append((q, q, q))
+        segments.append((bool(closed), triples))
+    return segments
+
+
+def _spline_data(local, mg, bd, sf):
+    """The segments of _spline_local in world XY and on screen."""
+    segments = []
+    for closed, triples in local:
         world, screen = [], []
         for p, h_in, h_out in triples:
             p, h_in, h_out = mg * p, mg * h_in, mg * h_out
             world.append([p.x, p.y, h_in.x, h_in.y, h_out.x, h_out.y])
             screen.append([*_to_frame(bd, sf, p), *_to_frame(bd, sf, h_in), *_to_frame(bd, sf, h_out)])
-        segments.append({"closed": bool(closed), "world": world, "screen": screen})
+        segments.append({"closed": closed, "world": world, "screen": screen})
     return segments
+
+
+# ------------------------------------------------- 3D: cards and the camera
+#
+# For Cavalry's 3D mode, flat objects (splines, text, logos, planes) also
+# travel as a card: their shape in the plane they lie on, plus where that
+# plane is in the world, so Cavalry can stand them in its 2.5D space and draw
+# the perspective itself. The camera travels as its axes and focal length.
+
+def _vec(v):
+    return [round(v.x, 4), round(v.y, 4), round(v.z, 4)]
+
+
+def _plane_frame(pts):
+    """(origin, u, v) of the plane all `pts` lie on (u, v unit vectors in it,
+    origin the plane's point nearest to (0, 0, 0)), or None when they don't
+    lie on one plane."""
+    if len(pts) < 2:
+        return None
+    lo = c4d.Vector(min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts))
+    hi = c4d.Vector(max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts))
+    extent = (hi - lo).GetLength()
+    if extent < 1e-9:
+        return None
+    # Newell's normal for curves; a straight line has none, so the axis
+    # planes are tried after it.
+    n = c4d.Vector()
+    for a, b in zip(pts, pts[1:] + pts[:1]):
+        n += c4d.Vector((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y))
+    candidates = [c4d.Vector(0, 0, 1), c4d.Vector(0, 1, 0), c4d.Vector(1, 0, 0)]
+    if n.GetLength() > 1e-9 * extent * extent:
+        n = n.GetNormalized()
+        if max((n.x, n.y, n.z), key=abs) < 0:   # the same side whichever way the curve winds
+            n = -n
+        candidates.insert(0, n)
+    tol = 1e-4 * extent
+    for n in candidates:
+        d = n.Dot(pts[0])
+        if all(abs(n.Dot(p) - d) <= tol for p in pts):
+            u = c4d.Vector(1, 0, 0) - n * n.x
+            if u.GetLength() < 0.1:
+                u = c4d.Vector(0, 1, 0) - n * n.y
+            u = u.GetNormalized()
+            return n * d, u, n.Cross(u)
+    return None
+
+
+def _card(mg, frame, loops):
+    """A card: the plane `frame` (origin, u, v in the object's space) placed
+    with `mg`, and the shape's contours as [u, v] coordinates in it."""
+    o, u, v = frame
+    return {"o": _vec(mg * o), "u": _vec(mg.MulV(u)), "v": _vec(mg.MulV(v)), "path": loops}
+
+
+def _spline_card(obj, local):
+    """The card of a flat spline (or None)."""
+    frame = _plane_frame([q for _, triples in local for t in triples for q in t])
+    if frame is None:
+        return None
+    o, u, v = frame
+    path = [{"closed": closed,
+             "points": [[round(c, 3) for q in t for c in ((q - o).Dot(u), (q - o).Dot(v))] for t in triples]}
+            for closed, triples in local]
+    return _card(obj.GetMg(), frame, path)
+
+
+def _outline_card(obj):
+    """The card of a flat polygon object (a Plane, a Disc...), its outline
+    traced in its own plane (or None)."""
+    parts = _polygon_parts(obj, c4d.Matrix())   # in the object's own space
+    if not parts:
+        return None
+    guid = str(obj.GetGUID())
+    key = (obj.GetDirty(c4d.DIRTYFLAGS_DATA | c4d.DIRTYFLAGS_CACHE), obj.GetHDirty(c4d.HDIRTYFLAGS_OBJECT))
+    hit = _outline_cache.get((guid, "card"))
+    if not (hit and hit[0] == key):
+        pts, tris = _mesh(parts)
+        frame = _plane_frame(pts)
+        loops = []
+        if frame is not None:
+            o, u, v = frame
+            flat = [((p - o).Dot(u), (p - o).Dot(v)) for p in pts]
+            loops = [{"closed": True, "points": [[round(x, 3), round(y, 3)] * 3 for x, y in loop]}
+                     for loop in _outline_loops(flat, tris)]
+        hit = (key, frame, loops)
+        _outline_cache[(guid, "card")] = hit
+    _, frame, loops = hit
+    return _card(obj.GetMg(), frame, loops) if loops else None
+
+
+def _camera_data(doc, bd):
+    """The camera `bd` looks through: position and unit axes in world space,
+    and (perspective only) its focal length in frame widths and how far its
+    film offset moves the centre, both measured by projecting points, so
+    sensor, zoom and the editor camera all count."""
+    cam = bd.GetSceneCamera(doc) or bd.GetEditorCamera()
+    mg = cam.GetMg()
+    x, y, z = mg.v1.GetNormalized(), mg.v2.GetNormalized(), mg.v3.GetNormalized()
+    perspective = not cam.CheckType(c4d.Ocamera) or cam[c4d.CAMERA_PROJECTION] == c4d.Pperspective
+    data = {"pos": _vec(mg.off), "x": _vec(x), "y": _vec(y), "z": _vec(z), "perspective": perspective}
+    if perspective:
+        sf = bd.GetSafeFrame()
+        ahead = mg.off + z * 1000.0
+        cx, cy = _to_frame(bd, sf, ahead)
+        sx, _ = _to_frame(bd, sf, ahead + x * 100.0)
+        data["focal"] = round((sx - cx) * 10.0, 6)   # 100 units across, 1000 ahead
+        data["shift"] = [round(cx - 0.5, 6), round(cy - 0.5, 6)]
+    return data
 
 
 # ----------------------------------------------- polygon objects -> outlines
@@ -797,11 +915,27 @@ def tag_draw(tag, bd):
         # Baked objects carry their animation as keys in Cavalry; live
         # updates would overwrite them.
         "animated": bool(_ud(tag, UD_ANIMATED, False)),
+        # The same for the camera, sent with Camera animation.
+        "cameraBaked": bool(_ud(tag, UD_CAMERA, False)),
+        "camera": _camera_data(doc, bd),
         "objects": objects,
     }, separators=(",", ":")).encode("utf-8")
     srv.state = state
     publish_state(state)
     return True
+
+
+def _display_color(obj, doc):
+    """The object's Display Color as [r, g, b] (0..1) when it sets one (On,
+    or from its layer), else None (Off / Automatic: C4D's own default)."""
+    mode = obj[c4d.ID_BASEOBJECT_USECOLOR]
+    if mode == c4d.ID_BASEOBJECT_USECOLOR_ALWAYS:
+        col = obj[c4d.ID_BASEOBJECT_COLOR]
+    elif mode == c4d.ID_BASEOBJECT_USECOLOR_LAYER and obj.GetLayerObject(doc) is not None:
+        col = obj.GetLayerObject(doc)[c4d.ID_LAYER_COLOR]
+    else:
+        return None
+    return [round(col.x, 4), round(col.y, 4), round(col.z, 4)]
 
 
 def collect_objects(doc, inex, bd):
@@ -823,13 +957,29 @@ def collect_objects(doc, inex, bd):
         base = {"id": str(obj.GetGUID()), "name": obj.GetName(), "parent": parent,
                 "visible": obj.GetEditorMode() != c4d.MODE_OFF,
                 "depth": (cam_inv * p).z if perspective else 1.0}
+        color = _display_color(obj, doc)
+        if color is not None:
+            base["color"] = color
         # Splines travel as their curves, polygon objects as their outline as
-        # the camera sees it; Cavalry draws both as editable shapes.
-        spline = _spline_data(obj, bd, sf)
-        if spline is None:
-            spline = _outline_data(obj, bd, sf, cam)
+        # the camera sees it; Cavalry draws both as editable shapes, splines
+        # as strokes (open curves have nothing to fill) and outlines filled.
+        # The object's axis travels as the pivot, so rotating or scaling the
+        # shape in Cavalry turns it around the same point as in C4D.
+        pivot = {"world": [p.x, p.y], "screen": list(_to_frame(bd, sf, p))}
+        # Flat ones also travel as a card, for Cavalry's 3D mode.
+        local = _spline_local(obj)
+        if local is not None:
+            base.update(kind="spline", spline=_spline_data(local, mg, bd, sf), stroke=True, pivot=pivot)
+            card = _spline_card(obj, local)
+            if card is not None:
+                base["card"] = card
+            return base
+        spline = _outline_data(obj, bd, sf, cam)
         if spline is not None:
-            base.update(kind="spline", spline=spline)
+            base.update(kind="spline", spline=spline, pivot=pivot)
+            card = _outline_card(obj)
+            if card is not None:
+                base["card"] = card
             return base
         hpb = c4d.utils.MatrixToHPB(mg)
         sx, sy = _to_frame(bd, sf, p)
@@ -838,6 +988,8 @@ def collect_objects(doc, inex, bd):
         ax, ay = _to_frame(bd, sf, p + mg.v1.GetNormalized() * 100.0)
         dx, dy = (ax - sx) * frame_w, (ay - sy) * frame_h
         base.update(kind="object",
+                    # Its axes as a card (no shape), for the 3D mode.
+                    card={"o": _vec(p), "u": _vec(mg.v1), "v": _vec(mg.v2)},
                     pos=[p.x, p.y, p.z],
                     rot=[math.degrees(hpb.x), math.degrees(hpb.y), math.degrees(hpb.z)],
                     scale=[mg.v1.GetLength(), mg.v2.GetLength(), mg.v3.GetLength()],
@@ -882,10 +1034,12 @@ def collect_objects(doc, inex, bd):
 _baking = False   # set while bake() steps through the frames
 
 
-def bake(doc, tag, bd):
-    """Steps through the preview range and writes every frame of the listed
-    objects to the bake file, for Cavalry to turn into keyframes. Returns
-    (first frame, last frame)."""
+def bake(doc, tag, bd, objects_too=True, camera_too=False):
+    """Steps through the preview range and writes every frame to the bake
+    file, for Cavalry to turn into keyframes: the listed objects (with
+    Animation) and the camera (with Camera animation; every frame carries
+    it anyway, as the 3D mode places outlines with it). Returns (first
+    frame, last frame)."""
     global _baking
     inex = _ud(tag, UD_OBJECTS, None)
     fps = doc.GetFps()
@@ -900,14 +1054,18 @@ def bake(doc, tag, bd):
             doc.ExecutePasses(None, True, True, True, c4d.BUILDFLAGS_NONE)
             # Redraw so the view (and an animated camera) is at this frame.
             c4d.DrawViews(c4d.DRAWFLAGS_ONLY_ACTIVE_VIEW | c4d.DRAWFLAGS_NO_THREAD | c4d.DRAWFLAGS_STATICBREAK)
-            objects, aspect = collect_objects(doc, inex, bd)
-            frames.append({"frame": f, "objects": objects})
+            objects, aspect = collect_objects(doc, inex, bd) if objects_too else ([], None)
+            frames.append({"frame": f, "objects": objects, "camera": _camera_data(doc, bd)})
     finally:
         _baking = False
         doc.SetTime(now)
         doc.ExecutePasses(None, True, True, True, c4d.BUILDFLAGS_NONE)
+    if not objects_too:
+        sf = bd.GetSafeFrame()
+        aspect = max(sf["cr"] - sf["cl"], 1) / float(max(sf["cb"] - sf["ct"], 1))
     data = json.dumps({"id": "%x" % int(time.time() * 1000), "fps": fps, "first": first, "last": last,
-                       "aspect": aspect if frames else 1.0, "frames": frames},
+                       "aspect": aspect if frames else 1.0, "keyObjects": objects_too,
+                       "keyCamera": camera_too, "frames": frames},
                       separators=(",", ":")).encode("utf-8")
     tmp = BAKE_FILE + ".tmp"
     with open(tmp, "wb") as fh:
@@ -1064,8 +1222,10 @@ class CavalrySpline(plugins.ObjectData):
             op.SetDirty(c4d.DIRTYFLAGS_DATA)
 
     def _shapes(self, op):
-        if op[c4d.CAVALRYSPLINE_FOLLOW]:
-            return _server.shapes if _server else []
+        # Following: the latest send while one has arrived since C4D started,
+        # else the copy of it saved with the scene (see _store_latest).
+        if op[c4d.CAVALRYSPLINE_FOLLOW] and _server and _server.shapes:
+            return _server.shapes
         src = op.GetDataInstance().GetString(SHAPES_DATA)
         if src != self._parsed_src:  # parse once per change, not every rebuild
             self._parsed = json.loads(src) if src else []
@@ -1129,6 +1289,32 @@ class CavalrySpline(plugins.ObjectData):
 
 # ====================================================== sends -> objects
 
+def _store_shapes(op, shapes):
+    """Saves `shapes` with the Cavalry Spline `op` (main thread only);
+    returns what was stored."""
+    keep = ("id", "name", "contours", "color")
+    stored = [{k: s[k] for k in keep if k in s} for s in shapes]
+    op.GetDataInstance().SetString(SHAPES_DATA, json.dumps(stored, separators=(",", ":")))
+    return stored
+
+
+def _store_latest(doc):
+    """Gives every Cavalry Spline that follows the latest send a saved copy
+    of it, so the scene reopens with its shapes after C4D restarts (when no
+    send has arrived yet)."""
+    shapes = _server.shapes if _server else []
+    if not shapes:
+        return
+    stack = [doc.GetFirstObject()]
+    while stack:
+        op = stack.pop()
+        while op is not None:
+            if op.CheckType(PLUGIN_ID) and op[c4d.CAVALRYSPLINE_FOLLOW]:
+                _store_shapes(op, shapes)
+            stack.append(op.GetDown())
+            op = op.GetNext()
+
+
 def _new_cavalry_spline(name, shapes):
     """A Cavalry Spline holding its own copy of `shapes` (not inserted),
     sized to them and coloured like the Cavalry fill."""
@@ -1137,9 +1323,7 @@ def _new_cavalry_spline(name, shapes):
         return None
     op.SetName(name or "Cavalry Spline")
     op[c4d.CAVALRYSPLINE_FOLLOW] = False
-    keep = ("id", "name", "contours", "color")
-    stored = [{k: s[k] for k in keep if k in s} for s in shapes]
-    op.GetDataInstance().SetString(SHAPES_DATA, json.dumps(stored, separators=(",", ":")))
+    stored = _store_shapes(op, shapes)
     op[c4d.CAVALRYSPLINE_WIDTH], op[c4d.CAVALRYSPLINE_HEIGHT] = natural_size(stored)
     colors = [s["color"] for s in shapes if s.get("color")]
     if colors:
@@ -1211,6 +1395,7 @@ class ShapesReceiver(plugins.MessageData):
                         _add_send(doc, send)
                     except Exception as e:
                         print("[Cavalry Bridge] could not add shapes: %s" % e)
+                _store_latest(doc)
                 c4d.EventAdd()
         return True
 
@@ -1224,6 +1409,23 @@ ID_SENDING = 1003
 ID_RECEIVED = 1004
 ID_ADD_SPLINE = 1005
 ID_ANIMATION = 1006
+ID_SEND_SCENE = 1007
+ID_CAMERA_BAKE = 1008
+
+# Scene objects Send Scene leaves out: they draw nothing Cavalry could show.
+_NOT_SENT = {c4d.Ocamera, c4d.Olight, c4d.Osky, c4d.Oenvironment, c4d.Ofloor,
+             c4d.Oforeground, c4d.Obackground, c4d.Ostage,
+             1057516, 1036751, 1036757, 1036754}   # Redshift camera, light, environment, sky
+
+
+def _scene_objects(doc, host):
+    """The top-level objects Send Scene sends."""
+    out, op = [], doc.GetFirstObject()
+    while op is not None:
+        if op != host and op.GetType() not in _NOT_SENT:
+            out.append(op)
+        op = op.GetNext()
+    return out
 
 
 def _describe(objs):
@@ -1259,7 +1461,9 @@ class BridgePanel(gui.GeDialog):
         self.GroupBorder(c4d.BORDER_GROUP_IN)
         self.GroupBorderSpace(8, 6, 8, 6)
         self.AddCheckbox(ID_ANIMATION, c4d.BFH_SCALEFIT, 0, 0, "Animation (key every frame of the preview range)")
+        self.AddCheckbox(ID_CAMERA_BAKE, c4d.BFH_SCALEFIT, 0, 0, "Camera animation (key the camera; Cavalry switches to 3D)")
         self.AddButton(ID_SEND, c4d.BFH_SCALEFIT, 0, 0, "Send Selected to Cavalry")
+        self.AddButton(ID_SEND_SCENE, c4d.BFH_SCALEFIT, 0, 0, "Send Scene to Cavalry")
         self.AddStaticText(ID_SENDING, c4d.BFH_SCALEFIT, 0, 0, "", c4d.BORDER_NONE)
         self.GroupEnd()
 
@@ -1280,6 +1484,7 @@ class BridgePanel(gui.GeDialog):
         doc = c4d.documents.GetActiveDocument()
         tag = find_bridge_tag(doc) if doc else None
         self.SetBool(ID_ANIMATION, bool(tag and _ud(tag, UD_ANIMATED, False)))   # as last sent
+        self.SetBool(ID_CAMERA_BAKE, bool(tag and _ud(tag, UD_CAMERA, False)))
         self.Refresh()
         self.SetTimer(1000)
         return True
@@ -1310,7 +1515,9 @@ class BridgePanel(gui.GeDialog):
         elif objs and _ud(tag, UD_ENABLED, True):
             sending = "Sending live: " + _describe(objs)
         else:
-            sending = "Select splines, objects or folders in the Object Manager, then click Send."
+            sending = "Select splines, objects or folders in the Object Manager and click Send Selected, or click Send Scene."
+        if objs and _ud(tag, UD_ENABLED, True) and _ud(tag, UD_CAMERA, False):
+            sending += " Camera keyed."
         self.SetString(ID_SENDING, sending)
         if tag is not None:
             port = int(_ud(tag, UD_PORT, DEFAULT_PORT))
@@ -1330,6 +1537,9 @@ class BridgePanel(gui.GeDialog):
             return True
         if id == ID_SEND:
             self._send_selected(doc)
+        elif id == ID_SEND_SCENE:
+            tag = find_bridge_tag(doc)
+            self._send(doc, _scene_objects(doc, tag.GetObject() if tag else None))
         elif id == ID_PORT:
             tag = find_bridge_tag(doc)
             if tag is not None:
@@ -1340,6 +1550,8 @@ class BridgePanel(gui.GeDialog):
                 c4d.EventAdd()
         elif id == ID_ADD_SPLINE:
             op = c4d.BaseObject(PLUGIN_ID)   # Follow Latest Send is on by default
+            if _server and _server.shapes:
+                _store_shapes(op, _server.shapes)
             doc.StartUndo()
             doc.InsertObject(op)
             doc.AddUndo(c4d.UNDOTYPE_NEWOBJ, op)
@@ -1353,7 +1565,12 @@ class BridgePanel(gui.GeDialog):
         before); nothing selected stops sending."""
         tag = find_bridge_tag(doc)
         host = tag.GetObject() if tag else None   # the bridge's own Null is never sent
-        selected = [o for o in doc.GetActiveObjects(c4d.GETACTIVEOBJECTFLAGS_SELECTIONORDER) if o != host]
+        self._send(doc, [o for o in doc.GetActiveObjects(c4d.GETACTIVEOBJECTFLAGS_SELECTIONORDER) if o != host])
+
+    def _send(self, doc, selected):
+        """`selected` becomes what is sent live (replacing what was sent
+        before); none stops sending."""
+        tag = find_bridge_tag(doc)
         if not selected and tag is None:
             return
         doc.StartUndo()
@@ -1365,13 +1582,17 @@ class BridgePanel(gui.GeDialog):
         tag[c4d.ID_USERDATA, UD_OBJECTS] = inex
         tag[c4d.ID_USERDATA, UD_ENABLED] = True
         animated = self.GetBool(ID_ANIMATION) and bool(selected)
+        camera = self.GetBool(ID_CAMERA_BAKE) and bool(selected)
         if _ud(tag, UD_ANIMATED, None) is None:
             _add_ud(tag, c4d.DTYPE_BOOL, "Animation", False)   # tags made before 1.2.1
+        if _ud(tag, UD_CAMERA, None) is None:
+            _add_ud(tag, c4d.DTYPE_BOOL, "Camera Animation", False)   # tags made before 1.3.0
         tag[c4d.ID_USERDATA, UD_ANIMATED] = animated
+        tag[c4d.ID_USERDATA, UD_CAMERA] = camera
         doc.EndUndo()
-        if animated:
+        if animated or camera:
             self.SetString(ID_SENDING, "Sending every frame...")
-            first, last = bake(doc, tag, doc.GetActiveBaseDraw())
+            first, last = bake(doc, tag, doc.GetActiveBaseDraw(), animated, camera)
             c4d.StatusSetText("Cavalry Bridge: sent frames %d-%d" % (first, last))
         c4d.EventAdd()
         self.Refresh()
